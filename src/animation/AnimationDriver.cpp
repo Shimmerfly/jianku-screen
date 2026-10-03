@@ -1,27 +1,11 @@
 #include "AnimationDriver.h"
+#include "AnimationSettings.h"
 
 #include "../mac/MousePoll.h"
 
 #include <QTimer>
 #include <algorithm>
 #include <cmath>
-
-namespace {
-Animation::SpringConfig springFrom(const QVariantMap &map, const QString &key,
-    const Animation::SpringConfig &fallback) {
-    const QVariantMap value = map.value(key).toMap();
-    if (value.isEmpty())
-        return fallback;
-    Animation::SpringConfig config = fallback;
-    if (value.contains("stiffness"))
-        config.stiffness = value.value("stiffness").toDouble();
-    if (value.contains("damping"))
-        config.damping = value.value("damping").toDouble();
-    if (value.contains("mass"))
-        config.mass = value.value("mass").toDouble();
-    return config;
-}
-}
 
 AnimationDriver::AnimationDriver(QObject *parent) : QObject(parent) {
     const QSizeF size = primaryScreenPoints();
@@ -67,31 +51,20 @@ void AnimationDriver::stop() {
 }
 
 void AnimationDriver::setSettings(const QVariantMap &settings) {
-    if (settings.contains("mouseMovementSpring"))
-        cursorSettings_.movement = springFrom(settings, "mouseMovementSpring", cursorSettings_.movement);
-    // Smoothing stays on unless the explicit "关闭平滑" switch is set or the
-    // preset picker is on "None". Both used to be written to the store and then
-    // ignored, so picking "无" still ran the 470/70/3 spring.
-    const bool explicitOff = settings.value("disableMouseMovementSpring").toBool();
-    const bool presetOff = settings.value("cursorSmoothing").toString() == QStringLiteral("None");
-    smoothingEnabled_ = !explicitOff && !presetOff;
-    cursorSettings_.smoothingEnabled = smoothingEnabled_;
-    if (settings.contains("clickEffect"))
-        cursorSettings_.clickScaleEnabled = settings.value("clickEffect").toString() != QStringLiteral("none");
-    if (settings.contains("cursorRotateOnXMovementRatio"))
-        cursorSettings_.rotationRatio = settings.value("cursorRotateOnXMovementRatio").toDouble();
-    if (settings.contains("hideNotMovingCursorAfterMs"))
-        cursorSettings_.hideAfterMs = settings.value("hideNotMovingCursorAfterMs").toDouble();
-    if (settings.contains("cursorBaseRotation"))
-        cursorSettings_.baseRotationDeg = settings.value("cursorBaseRotation").toDouble();
-    if (settings.contains("defaultZoomLevel"))
-        zoomLevel_ = settings.value("defaultZoomLevel").toDouble();
-    if (settings.contains("autoZoom"))
-        autoZoomEnabled_ = settings.value("autoZoom").toBool();
-    if (settings.contains("snapToEdgesRatio"))
-        snapToEdgesRatio_ = settings.value("snapToEdgesRatio").toDouble();
-    if (settings.contains("screenMovementSpring"))
-        screenSpring_ = springFrom(settings, "screenMovementSpring", screenSpring_);
+    // Shared with the offline compositor so both read a setting the same way.
+    Animation::DriverSettings base;
+    base.cursor = cursorSettings_;
+    base.screenSpring = screenSpring_;
+    base.autoZoom = autoZoomEnabled_;
+    base.zoomLevel = zoomLevel_;
+    base.snapToEdgesRatio = snapToEdgesRatio_;
+    const Animation::DriverSettings resolved = Animation::driverSettingsFromMap(settings, base);
+    cursorSettings_ = resolved.cursor;
+    screenSpring_ = resolved.screenSpring;
+    autoZoomEnabled_ = resolved.autoZoom;
+    zoomLevel_ = resolved.zoomLevel;
+    snapToEdgesRatio_ = resolved.snapToEdgesRatio;
+    smoothingEnabled_ = cursorSettings_.smoothingEnabled;
     camScaleSpring_.setConfig(screenSpring_);
     camXSpring_.setConfig(screenSpring_);
     camYSpring_.setConfig(screenSpring_);

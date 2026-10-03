@@ -1,5 +1,8 @@
 #include "../src/animation/CursorEngine.h"
+#include "../src/animation/AnimationSettings.h"
 
+#include <QCoreApplication>
+#include <QVariantMap>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -27,7 +30,8 @@ EventTrack sampleTrack() {
 }
 }
 
-int main() {
+int main(int argc, char **argv) {
+    QCoreApplication app(argc, argv);
     try {
         CursorEngine engine;
         engine.setTrack(sampleTrack());
@@ -153,6 +157,46 @@ int main() {
             for (int i = 0; i < 200; ++i)
                 e.advanceTo(1100.0 + i * 1000.0 / 60.0);
             require(close(e.advanceTo(6000.0).x, 100.0, 1e-3), "spring converges to target");
+        }
+
+        // Settings-map mapping is shared with the offline compositor, so the two
+        // readers cannot drift apart again.
+        {
+            const DriverSettings plain = driverSettingsFromMap({});
+            require(plain.cursor.smoothingEnabled, "smoothing defaults on for an empty map");
+            require(plain.cursor.clickScaleEnabled, "click feedback defaults on for an empty map");
+
+            QVariantMap off;
+            off.insert("cursorSmoothing", QStringLiteral("None"));
+            require(!driverSettingsFromMap(off).cursor.smoothingEnabled,
+                "the None preset disables smoothing");
+
+            QVariantMap noClick;
+            noClick.insert("clickEffect", QStringLiteral("none"));
+            require(!driverSettingsFromMap(noClick).cursor.clickScaleEnabled,
+                "clickEffect none disables the click feedback");
+
+            QVariantMap spring;
+            spring.insert("mouseMovementSpring",
+                QVariantMap{{"stiffness", 999.0}, {"damping", 111.0}, {"mass", 2.0}});
+            const DriverSettings tuned = driverSettingsFromMap(spring);
+            require(close(tuned.cursor.movement.stiffness, 999.0)
+                    && close(tuned.cursor.movement.damping, 111.0)
+                    && close(tuned.cursor.movement.mass, 2.0), "movement spring is read");
+            require(close(tuned.screenSpring.stiffness, 200.0),
+                "a missing screen spring keeps the base value");
+
+            QVariantMap screens;
+            screens.insert("screenMovementSpring",
+                QVariantMap{{"stiffness", 170.0}, {"damping", 50.0}, {"mass", 3.0}});
+            screens.insert("defaultZoomLevel", 1.4);
+            screens.insert("snapToEdgesRatio", 0.3);
+            const DriverSettings resolved = driverSettingsFromMap(screens);
+            require(close(resolved.screenSpring.stiffness, 170.0), "screen spring is read");
+            require(close(resolved.zoomLevel, 1.4), "zoom level is read");
+            require(close(resolved.snapToEdgesRatio, 0.3), "snap ratio is read");
+            require(close(resolved.cursor.movement.stiffness, 470.0),
+                "screen settings do not clobber the cursor spring");
         }
 
         std::cout << "cursor engine checks passed\n";

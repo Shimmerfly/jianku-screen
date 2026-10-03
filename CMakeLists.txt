@@ -23,6 +23,8 @@ qt_add_executable(jianku-screen MACOSX_BUNDLE
     src/animation/AutoFocusEngine.cpp
     src/animation/AnimationDriver.cpp
     src/animation/AnimationDriver.h
+    src/animation/AnimationSettings.cpp
+    src/animation/AnimationSettings.h
     src/project/ProjectTimeline.cpp
     src/capture/VideoFrameStore.cpp
     src/capture/VideoFrameStore.h
@@ -62,7 +64,8 @@ if(BUILD_TESTING)
     add_test(NAME spring-solver COMMAND spring-tests)
 
     add_executable(cursor-tests tests/CursorTests.cpp
-        src/animation/CursorEngine.cpp src/animation/SpringSolver.cpp)
+        src/animation/CursorEngine.cpp src/animation/SpringSolver.cpp
+        src/animation/AnimationSettings.cpp)
     target_link_libraries(cursor-tests PRIVATE Qt6::Core)
     add_test(NAME cursor-engine COMMAND cursor-tests)
 
@@ -74,6 +77,10 @@ if(BUILD_TESTING)
     add_executable(media-clock-tests tests/MediaClockTests.cpp src/capture/MediaClock.h)
     target_link_libraries(media-clock-tests PRIVATE Qt6::Core)
     add_test(NAME media-clock COMMAND media-clock-tests)
+
+    add_executable(canvas-layout-tests tests/CanvasLayoutTests.cpp src/render/CanvasLayout.cpp)
+    target_link_libraries(canvas-layout-tests PRIVATE Qt6::Core)
+    add_test(NAME canvas-layout COMMAND canvas-layout-tests)
 endif()
 
 set_source_files_properties(src/mac/MacCapture.mm src/mac/QuickScreenshot.mm
