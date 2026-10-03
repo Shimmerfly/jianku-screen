@@ -44,9 +44,10 @@ public:
     Q_INVOKABLE void setProjectDirectory(const QString &directory);
 
     // Starts an export. `outputPath` may be empty to use the default.
-    // `includeCursor` / `includeAutoZoom` / `includeAudio` map to the CLI flags.
+    // `includeCursor` / `includeAutoZoom` / `includeAudio` map to the CLI flags;
+    // `includeMicrophone` mixes in microphone.m4a when the project has one.
     Q_INVOKABLE bool start(const QString &outputPath = {}, bool includeCursor = true,
-        bool includeAutoZoom = true, bool includeAudio = true);
+        bool includeAutoZoom = true, bool includeAudio = true, bool includeMicrophone = true);
 
     Q_INVOKABLE void cancel();
     Q_INVOKABLE void revealOutput() const;

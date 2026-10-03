@@ -49,7 +49,7 @@ void ExportController::setProjectDirectory(const QString &directory) {
 }
 
 bool ExportController::start(const QString &outputPath, bool includeCursor,
-    bool includeAutoZoom, bool includeAudio) {
+    bool includeAutoZoom, bool includeAudio, bool includeMicrophone) {
     if (busy_) {
         error_ = QStringLiteral("已有导出在进行中");
         emit errorChanged();
@@ -78,6 +78,7 @@ bool ExportController::start(const QString &outputPath, bool includeCursor,
     options.includeCursor = includeCursor;
     options.includeAutoZoom = includeAutoZoom;
     options.includeAudio = includeAudio;
+    options.includeMicrophone = includeMicrophone;
     options.shouldCancel = [this] { return cancelRequested_.load(); };
 
     const QString target = options.outputPath;

@@ -263,7 +263,8 @@ ApplicationWindow {
                         else {
                             exporter.reset()
                             exporter.start(exporter.defaultOutputPath, true,
-                                !!settings.current.autoZoom, true)
+                                !!settings.current.autoZoom, true,
+                                !settings.current.muteMicrophone)
                         }
                     }
                 }

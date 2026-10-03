@@ -121,7 +121,7 @@ int main(int argc, char **argv) {
             ExportController controller;
             require(!controller.busy(), "idle at construction");
             require(controller.defaultOutputPath().isEmpty(), "no default output before a recording");
-            require(!controller.start(QString(), true, true, true),
+            require(!controller.start(QString(), true, true, true, true),
                 "starting without a project fails instead of pretending to export");
             require(!controller.error().isEmpty(), "the refusal explains itself");
         }
@@ -135,7 +135,7 @@ int main(int argc, char **argv) {
             controller.setProjectDirectory(root);
             require(controller.defaultOutputPath() == root + "/composed.mp4",
                 "default output is composed.mp4 next to the project");
-            require(controller.start(QString(), true, true, false), "export starts");
+            require(controller.start(QString(), true, true, false, false), "export starts");
             require(controller.busy(), "busy while exporting");
 
             double seenProgress = 0.0;
@@ -176,7 +176,7 @@ int main(int argc, char **argv) {
         {
             ExportController controller;
             controller.setProjectDirectory(root + "/does-not-exist");
-            require(!controller.start(QString(), true, true, false),
+            require(!controller.start(QString(), true, true, false, false),
                 "a project directory without project.json is refused");
         }
 
