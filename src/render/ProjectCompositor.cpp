@@ -432,7 +432,21 @@ const CursorDefinition *cursorAt(const ProjectData &project, double mediaTimeMs)
 // Context
 // ---------------------------------------------------------------------------
 
-ComposeContext makeComposeContext(ProjectData project, const QString &backgroundRoot) {
+void applyMotionBlurOverrides(MotionBlurSettings &settings, const MotionBlurSettings &overrides) {
+    if (overrides.amount >= 0.0)
+        settings.amount = overrides.amount;
+    if (overrides.cursorAmount >= 0.0)
+        settings.cursorAmount = overrides.cursorAmount;
+    if (overrides.screenMoveAmount >= 0.0)
+        settings.screenMoveAmount = overrides.screenMoveAmount;
+    if (overrides.screenZoomAmount >= 0.0)
+        settings.screenZoomAmount = overrides.screenZoomAmount;
+    if (overrides.fps > 0.0)
+        settings.fps = overrides.fps;
+}
+
+ComposeContext makeComposeContext(ProjectData project, const QString &backgroundRoot,
+    const MotionBlurSettings &blurOverride) {
     ComposeContext context;
     context.project = std::move(project);
     if (!context.project.valid) {
@@ -462,6 +476,26 @@ ComposeContext makeComposeContext(ProjectData project, const QString &background
     settings.gradientAngle = map.value(QStringLiteral("gradientAngle"), 135.0).toDouble();
     settings.cursorSizeFactor = map.value(QStringLiteral("cursorSize"), 1.5).toDouble();
     settings.hideCursor = map.value(QStringLiteral("hideCursor")).toBool();
+
+    // Motion blur: one global amount times a per-channel one, as the reference
+    // stores them. Motion blur is off unless a project asks for it, so existing
+    // recordings export exactly as before.
+    MotionBlurSettings &blur = settings.motionBlur;
+    blur.amount = map.value(QStringLiteral("motionBlurAmount"), 0.0).toDouble();
+    blur.cursorAmount = map.value(QStringLiteral("motionBlurCursorAmount"), 0.0).toDouble();
+    blur.screenMoveAmount = map.value(QStringLiteral("motionBlurScreenMoveAmount"), 0.0).toDouble();
+    blur.screenZoomAmount = map.value(QStringLiteral("motionBlurScreenZoomAmount"), 0.0).toDouble();
+    blur.fps = map.value(QStringLiteral("motionBlurFps"), 60.0).toDouble();
+    // The project's own settings are the base; the caller can override any of
+    // them without having to restate the rest.
+    MotionBlurSettings merged;
+    merged.amount = blur.amount;
+    merged.cursorAmount = blur.cursorAmount;
+    merged.screenMoveAmount = blur.screenMoveAmount;
+    merged.screenZoomAmount = blur.screenZoomAmount;
+    merged.fps = blur.fps;
+    applyMotionBlurOverrides(merged, blurOverride);
+    blur = merged;
 
     if (settings.backgroundType == QStringLiteral("image")) {
         const QString path = map.value(QStringLiteral("backgroundImagePath")).toString();
@@ -572,11 +606,109 @@ CursorPose AnimationSequence::cursorAt(double mediaTimeMs) {
 }
 
 // ---------------------------------------------------------------------------
+// Motion blur
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// The boundary of the camera layer on the canvas: the frame rectangle scaled and
+// translated by the camera. Its centre displacement and diagonal are what the
+// reference compares to decide move vs zoom — measured on what the viewer sees,
+// not on the spring's raw velocity.
+MotionBlur::LayerMotion screenMotion(const ComposeContext &context, const CameraPose &previous,
+    const CameraPose &current) {
+    const QRectF frame = context.layout.frameRect;
+    const double fit = context.layout.fitScale;
+    auto centreAt = [&](const CameraPose &camera) {
+        return frame.center() + QPointF(camera.offsetX * fit, camera.offsetY * fit);
+    };
+    MotionBlur::LayerMotion motion;
+    motion.centre = centreAt(current);
+    motion.centreDelta = centreAt(current) - centreAt(previous);
+    motion.diagonal = std::hypot(frame.width(), frame.height()) * current.scale;
+    motion.previousDiagonal = std::hypot(frame.width(), frame.height()) * previous.scale;
+    return motion;
+}
+
+// The pointer's own boundary, in canvas pixels. Its size follows the camera (the
+// pointer lives inside the zoomed layer), so a pure camera move changes its centre
+// by exactly the camera's own displacement — which is what subtractParentMotion
+// then removes.
+MotionBlur::LayerMotion cursorMotion(const ComposeContext &context, const CursorDefinition &shape,
+    const CameraPose &previousCamera, const CursorPose &previousCursor, const CameraPose &camera,
+    const CursorPose &cursor) {
+    const CanvasLayout &layout = context.layout;
+    const QRectF frame = layout.frameRect;
+    const double fit = layout.fitScale;
+    const double size = std::max(2.0, shape.widthPx * fit * context.settings.cursorSizeFactor);
+    auto centreAt = [&](const CameraPose &cam, const CursorPose &pose) {
+        // Matches how composeFrame places the pointer: inside the frame, then
+        // carried by the camera transform.
+        const QPointF inFrame(layout.contentRect.x() - frame.x() + pose.x * fit,
+            layout.contentRect.y() - frame.y() + pose.y * fit);
+        return frame.topLeft() + QPointF(cam.offsetX * fit, cam.offsetY * fit)
+            + (inFrame + QPointF(size / 2.0, size / 2.0)) * cam.scale;
+    };
+    MotionBlur::LayerMotion motion;
+    motion.centre = centreAt(camera, cursor);
+    motion.centreDelta = centreAt(camera, cursor) - centreAt(previousCamera, previousCursor);
+    const double diagonal = size * std::hypot(1.0, 1.0);
+    motion.diagonal = diagonal * camera.scale;
+    motion.previousDiagonal = diagonal * previousCamera.scale;
+    return motion;
+}
+
+} // namespace
+
+BlurPlan planBlur(const ComposeContext &context, const CameraPose &previousCamera,
+    const CursorPose &previousCursor, const CameraPose &camera, const CursorPose &cursor,
+    double mediaTimeMs, bool includeCursor) {
+    BlurPlan plan;
+    const ComposerSettings &settings = context.settings;
+    const MotionBlurSettings &blur = settings.motionBlur;
+    if (!(blur.amount > 0.0))
+        return plan;
+    const double fpsFactor = blur.fps / 60.0;
+
+    const MotionBlur::LayerMotion screen = screenMotion(context, previousCamera, camera);
+    const MotionBlur::Decision screenDecision = MotionBlur::decide(screen,
+        blur.amount, blur.screenMoveAmount, blur.screenZoomAmount, fpsFactor);
+    plan.screen.channel = screenDecision.channel;
+    plan.screen.moveVector = screenDecision.moveVector;
+    plan.screen.zoomStrength = screenDecision.zoomStrength;
+    // The blur centre for a zoom is the frame centre as drawn, so the smear runs
+    // radially out of (or into) what the viewer is looking at.
+    plan.screen.zoomCentre = screen.centre;
+
+    // The pointer only blurs when it is actually drawn: a hidden or fading
+    // pointer leaving a smear would be visible motion for something invisible.
+    const bool cursorVisible = includeCursor && !settings.hideCursor && cursor.alpha > 0.01;
+    const CursorDefinition *shape = cursorAt(context.project, mediaTimeMs);
+    if (!cursorVisible || !shape)
+        return plan;
+    MotionBlur::LayerMotion child = cursorMotion(context, *shape, previousCamera, previousCursor,
+        camera, cursor);
+    // The reference subtracts the parent's motion from the child's and cancels any
+    // axis that then opposes the parent. Without it a pointer being carried by a
+    // panning camera would smear twice.
+    const MotionBlur::LayerMotion parent = screenMotion(context, previousCamera, camera);
+    child.centreDelta = MotionBlur::subtractParentMotion(child.centreDelta, parent.centreDelta);
+    const MotionBlur::Decision cursorDecision = MotionBlur::decide(child,
+        blur.amount, blur.cursorAmount, 0.0, fpsFactor);
+    plan.cursor.channel = cursorDecision.channel;
+    plan.cursor.moveVector = cursorDecision.moveVector;
+    plan.cursor.zoomStrength = cursorDecision.zoomStrength;
+    plan.cursor.zoomCentre = child.centre;
+    return plan;
+}
+
+// ---------------------------------------------------------------------------
 // Frame rendering
 // ---------------------------------------------------------------------------
 
 QImage composeFrame(const ComposeContext &context, const QImage &source,
-    const CameraPose &camera, const CursorPose &cursor, double mediaTimeMs, bool includeCursor) {
+    const CameraPose &camera, const CursorPose &cursor, double mediaTimeMs, bool includeCursor,
+    const BlurPlan *blur) {
     if (!context.valid || source.isNull())
         return {};
 
@@ -615,22 +747,52 @@ QImage composeFrame(const ComposeContext &context, const QImage &source,
         painter.restore();
     }
 
-    painter.save();
-    painter.setClipRect(QRectF(QPointF(0, 0), QSizeF(canvasSize)));
-    painter.translate(frameRect.topLeft() + QPointF(cameraX, cameraY));
-    painter.scale(camera.scale, camera.scale);
+    // The screen layer and the pointer are rendered separately because each is
+    // blurred on its own: the reference gives the pointer its own strength, and
+    // subtracting the parent's motion only makes sense if the two are distinct
+    // layers. Both are drawn in canvas coordinates so a blur vector in canvas
+    // pixels means what it says.
+    QImage screenLayer(canvasSize, QImage::Format_ARGB32_Premultiplied);
+    screenLayer.fill(Qt::transparent);
+    QPainter screenPainter(&screenLayer);
+    screenPainter.setRenderHint(QPainter::Antialiasing);
+    screenPainter.setRenderHint(QPainter::SmoothPixmapTransform);
+    screenPainter.translate(frameRect.topLeft() + QPointF(cameraX, cameraY));
+    screenPainter.scale(camera.scale, camera.scale);
 
     QPainterPath framePath;
     framePath.addRoundedRect(QRectF(0.0, 0.0, frameRect.width(), frameRect.height()),
         settings.radius, settings.radius);
-    painter.setClipPath(framePath, Qt::IntersectClip);
-    painter.fillPath(framePath, QColor(QStringLiteral("#101013")));
+    screenPainter.setClipPath(framePath);
+    screenPainter.fillPath(framePath, QColor(QStringLiteral("#101013")));
 
     // layout.contentRect is in canvas coordinates; shift it into frame-local.
     const QRectF contentRect(layout.contentRect.x() - frameRect.x(),
         layout.contentRect.y() - frameRect.y(),
         layout.contentRect.width(), layout.contentRect.height());
-    painter.drawImage(contentRect, source);
+    screenPainter.drawImage(contentRect, source);
+
+    // Inset border: drawn on the frame edge, inside the rounded corners.
+    if (settings.insetSize > 0.01) {
+        QColor insetColor = settings.insetColor;
+        insetColor.setAlphaF(static_cast<float>(std::clamp(settings.insetAlpha, 0.0, 1.0)));
+        QPen pen(insetColor);
+        pen.setWidthF(settings.insetSize);
+        screenPainter.setPen(pen);
+        screenPainter.setBrush(Qt::NoBrush);
+        const double half = settings.insetSize / 2.0;
+        const double radius = std::max(0.0, settings.radius - half);
+        screenPainter.drawRoundedRect(QRectF(half, half, frameRect.width() - settings.insetSize,
+            frameRect.height() - settings.insetSize), radius, radius);
+    }
+    screenPainter.end();
+
+    if (blur && blur->screen.channel == MotionBlur::Channel::Move)
+        screenLayer = MotionBlur::applyMove(screenLayer, blur->screen.moveVector);
+    else if (blur && blur->screen.channel == MotionBlur::Channel::Zoom)
+        screenLayer = MotionBlur::applyZoom(screenLayer, blur->screen.zoomCentre,
+            blur->screen.zoomStrength);
+    painter.drawImage(0, 0, screenLayer);
 
     // Pointer overlay. It lives inside the camera-scaled frame, exactly like the
     // preview, so the pointer grows with the zoom instead of staying a fixed size.
@@ -645,36 +807,37 @@ QImage composeFrame(const ComposeContext &context, const QImage &source,
         const double hotspotX = definition->hotspotXPx / std::max(1.0, definition->widthPx);
         const double hotspotY = definition->hotspotYPx / std::max(1.0, definition->heightPx);
 
-        painter.save();
-        painter.translate(contentRect.x() + cursor.x * fitScale, contentRect.y() + cursor.y * fitScale);
+        // The pointer is drawn into its own layer so the blur only touches the
+        // pointer, never the screen underneath it.
+        QImage cursorLayer(canvasSize, QImage::Format_ARGB32_Premultiplied);
+        cursorLayer.fill(Qt::transparent);
+        QPainter cursorPainter(&cursorLayer);
+        cursorPainter.setRenderHint(QPainter::Antialiasing);
+        cursorPainter.setRenderHint(QPainter::SmoothPixmapTransform);
+        cursorPainter.translate(frameRect.topLeft() + QPointF(cameraX, cameraY));
+        cursorPainter.scale(camera.scale, camera.scale);
+        cursorPainter.translate(contentRect.x() + cursor.x * fitScale,
+            contentRect.y() + cursor.y * fitScale);
         // Rotation and the click feedback both pivot on the hotspot.
-        painter.translate(-hotspotX * baseWidth, -hotspotY * baseHeight);
+        cursorPainter.translate(-hotspotX * baseWidth, -hotspotY * baseHeight);
         if (std::abs(cursor.rotationDeg) > 0.001)
-            painter.rotate(cursor.rotationDeg);
+            cursorPainter.rotate(cursor.rotationDeg);
         if (std::abs(cursor.scale - 1.0) > 0.001) {
-            painter.translate(hotspotX * baseWidth, hotspotY * baseHeight);
-            painter.scale(cursor.scale, cursor.scale);
-            painter.translate(-hotspotX * baseWidth, -hotspotY * baseHeight);
+            cursorPainter.translate(hotspotX * baseWidth, hotspotY * baseHeight);
+            cursorPainter.scale(cursor.scale, cursor.scale);
+            cursorPainter.translate(-hotspotX * baseWidth, -hotspotY * baseHeight);
         }
-        painter.setOpacity(std::clamp(cursor.alpha, 0.0, 1.0));
-        painter.drawImage(QRectF(0.0, 0.0, baseWidth, baseHeight), definition->image);
-        painter.restore();
-    }
+        cursorPainter.setOpacity(std::clamp(cursor.alpha, 0.0, 1.0));
+        cursorPainter.drawImage(QRectF(0.0, 0.0, baseWidth, baseHeight), definition->image);
+        cursorPainter.end();
 
-    // Inset border: drawn on the frame edge, inside the rounded corners.
-    if (settings.insetSize > 0.01) {
-        QColor insetColor = settings.insetColor;
-        insetColor.setAlphaF(static_cast<float>(std::clamp(settings.insetAlpha, 0.0, 1.0)));
-        QPen pen(insetColor);
-        pen.setWidthF(settings.insetSize);
-        painter.setPen(pen);
-        painter.setBrush(Qt::NoBrush);
-        const double half = settings.insetSize / 2.0;
-        const double radius = std::max(0.0, settings.radius - half);
-        painter.drawRoundedRect(QRectF(half, half, frameRect.width() - settings.insetSize,
-            frameRect.height() - settings.insetSize), radius, radius);
+        if (blur && blur->cursor.channel == MotionBlur::Channel::Move)
+            cursorLayer = MotionBlur::applyMove(cursorLayer, blur->cursor.moveVector);
+        else if (blur && blur->cursor.channel == MotionBlur::Channel::Zoom)
+            cursorLayer = MotionBlur::applyZoom(cursorLayer, blur->cursor.zoomCentre,
+                blur->cursor.zoomStrength);
+        painter.drawImage(0, 0, cursorLayer);
     }
-    painter.restore();
 
     painter.end();
     return canvas;
@@ -743,7 +906,7 @@ ComposeResult composeProject(const ComposeOptions &options, const ComposeProgres
         return result;
     }
 
-    ComposeContext context = makeComposeContext(project, options.backgroundRoot);
+    ComposeContext context = makeComposeContext(project, options.backgroundRoot, options.motionBlur);
     if (!context.valid) {
         result.error = context.error;
         return result;
@@ -880,6 +1043,11 @@ ComposeResult composeProject(const ComposeOptions &options, const ComposeProgres
     QString failure;
     QByteArray encoderStderr;
     QByteArray decoderStderr;
+    // The blur of frame N is derived from the difference between frame N-1's pose
+    // and frame N's, so the previous pose has to survive the loop iteration.
+    CameraPose previousCamera;
+    CursorPose previousCursor;
+    bool havePreviousPose = false;
 
     // ffmpeg's stderr must be drained continuously. It is a pipe like any other:
     // letting it fill up blocks ffmpeg, and never reading it means the failure
@@ -948,8 +1116,18 @@ ComposeResult composeProject(const ComposeOptions &options, const ComposeProgres
 
         const CameraPose camera = sequence.cameraAt(mediaTimeMs);
         const CursorPose cursor = sequence.cursorAt(mediaTimeMs);
+        // Blur comes from the difference between the two poses on either side of
+        // this frame, so it is planned before the frame is drawn and persists
+        // across the loop rather than being recomputed from scratch each time.
+        const BlurPlan blur = havePreviousPose
+            ? planBlur(context, previousCamera, previousCursor, camera, cursor, mediaTimeMs,
+                  options.includeCursor)
+            : BlurPlan{};
+        previousCamera = camera;
+        previousCursor = cursor;
+        havePreviousPose = true;
         const QImage canvas = composeFrame(context, sourceFrame, camera, cursor, mediaTimeMs,
-            options.includeCursor);
+            options.includeCursor, blur.empty() ? nullptr : &blur);
         if (canvas.isNull()) {
             result.error = QStringLiteral("第 %1 帧合成失败").arg(frame);
             break;

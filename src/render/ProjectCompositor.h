@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CanvasLayout.h"
+#include "MotionBlur.h"
 
 #include "../animation/CursorEngine.h"
 #include "../animation/InputEvent.h"
@@ -111,10 +112,25 @@ struct CursorPose {
     double alpha = 1.0;
 };
 
+struct Snapshot {
+    CameraPose camera;
+    CursorPose cursor;
+};
+
+// Motion blur strengths, as stored in a project and as a caller may override them.
+// A negative value means "leave whatever the project says", so a caller can turn a
+// single channel up without having to restate the others.
+struct MotionBlurSettings {
+    double amount = -1.0;
+    double cursorAmount = -1.0;
+    double screenMoveAmount = -1.0;
+    double screenZoomAmount = -1.0;
+    double fps = -1.0;
+};
+
 // Settings the compositor honours, resolved once from the project map.
 struct ComposerSettings {
-    QSizeF canvasSize;
-    double paddingPercent = 0.0;
+    QSizeF canvasSize;    double paddingPercent = 0.0;
     double radius = 0.0;
     double insetSize = 0.0;
     QColor insetColor;
@@ -132,6 +148,33 @@ struct ComposerSettings {
     QString backgroundImagePath;
     double cursorSizeFactor = 1.5;
     bool hideCursor = false;
+
+    // Motion blur strengths, straight from the project's settings. The reference
+    // keeps one global amount plus a per-channel one for the pointer, screen
+    // movement and screen zoom; the same split is kept here so a project's saved
+    // values keep their meaning.
+    MotionBlurSettings motionBlur;
+};
+
+// One layer's blur for a single frame, already resolved into canvas pixels.
+struct LayerBlur {
+    MotionBlur::Channel channel = MotionBlur::Channel::None;
+    QPointF moveVector;        // canvas pixels
+    double zoomStrength = 0.0;
+    QPointF zoomCentre;        // canvas pixels
+};
+
+// Both blurrable layers of a frame. The background never blurs: it does not move
+// with the camera, so blurring it would smear the wallpaper while the content
+// stayed sharp.
+struct BlurPlan {
+    LayerBlur screen;
+    LayerBlur cursor;
+
+    bool empty() const {
+        return screen.channel == MotionBlur::Channel::None
+            && cursor.channel == MotionBlur::Channel::None;
+    }
 };
 
 // Everything that is constant for a whole clip. Building this once keeps the
@@ -149,11 +192,25 @@ struct ComposeContext {
     int height() const { return static_cast<int>(settings.canvasSize.height()); }
 };
 
-ComposeContext makeComposeContext(ProjectData project, const QString &backgroundRoot);
+ComposeContext makeComposeContext(ProjectData project, const QString &backgroundRoot,
+    const MotionBlurSettings &blurOverride = {});
 
-// Renders one composited canvas.
+// Applies caller overrides on top of the project's own values. Any field left
+// negative in `overrides` keeps what `settings` already holds.
+void applyMotionBlurOverrides(MotionBlurSettings &settings, const MotionBlurSettings &overrides);
+
+// Works out this frame's blur from where the two layers were last frame and where
+// they are now. `previous`/`current` are the poses the compositor is about to draw;
+// `mediaTimeMs` picks the pointer shape whose size defines the pointer boundary.
+BlurPlan planBlur(const ComposeContext &context, const CameraPose &previousCamera,
+    const CursorPose &previousCursor, const CameraPose &camera, const CursorPose &cursor,
+    double mediaTimeMs, bool includeCursor);
+
+// Renders one composited canvas. `blur` is optional; when given, the screen layer
+// and the pointer are smeared according to the plan before being drawn.
 QImage composeFrame(const ComposeContext &context, const QImage &source,
-    const CameraPose &camera, const CursorPose &cursor, double mediaTimeMs, bool includeCursor);
+    const CameraPose &camera, const CursorPose &cursor, double mediaTimeMs, bool includeCursor,
+    const BlurPlan *blur = nullptr);
 
 // Resolves the cursor definition in force at `mediaTimeMs` (last observation at
 // or before it, falling back to the first one).
@@ -205,6 +262,10 @@ struct ComposeOptions {
     // Mix the separately recorded microphone track into the output. Ignored when
     // the project has no microphone.m4a; see `ComposeResult::microphoneMuxed`.
     bool includeMicrophone = true;
+    // Overrides for the project's motion blur strengths. A negative field keeps
+    // what the project saved, so the CLI can compare a clip with and without blur
+    // without editing the project.
+    MotionBlurSettings motionBlur;
     // Mix levels, applied only on the microphone path (the system-only path is a
     // stream copy and stays untouched).
     double systemAudioVolume = 1.0;

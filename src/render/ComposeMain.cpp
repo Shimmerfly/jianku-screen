@@ -47,12 +47,21 @@ int main(int argc, char *argv[]) {
         QStringLiteral("不封装任何音轨"));
     const QCommandLineOption noMicrophoneOption(QStringLiteral("no-microphone"),
         QStringLiteral("只封装系统声音，不混入麦克风"));
+    const QCommandLineOption blurOption(QStringLiteral("motion-blur"),
+        QStringLiteral("覆盖动态模糊总强度（工程默认 0，即关闭）"), QStringLiteral("amount"));
+    const QCommandLineOption blurCursorOption(QStringLiteral("motion-blur-cursor"),
+        QStringLiteral("覆盖指针分项强度"), QStringLiteral("amount"));
+    const QCommandLineOption blurMoveOption(QStringLiteral("motion-blur-move"),
+        QStringLiteral("覆盖画面平移分项强度"), QStringLiteral("amount"));
+    const QCommandLineOption blurZoomOption(QStringLiteral("motion-blur-zoom"),
+        QStringLiteral("覆盖画面缩放分项强度"), QStringLiteral("amount"));
     const QCommandLineOption framesOption(QStringLiteral("frames"),
         QStringLiteral("只合成前 N 帧，用于冒烟验证"), QStringLiteral("n"));
     const QCommandLineOption startOption(QStringLiteral("start-ms"),
         QStringLiteral("从第几毫秒开始合成"), QStringLiteral("ms"), QStringLiteral("0"));
     parser.addOptions({outputOption, fpsOption, backgroundOption, ffmpegOption, noCursorOption,
-        noZoomOption, noAudioOption, noMicrophoneOption, framesOption, startOption});
+        noZoomOption, noAudioOption, noMicrophoneOption, blurOption, blurCursorOption,
+        blurMoveOption, blurZoomOption, framesOption, startOption});
     parser.process(app);
 
     const QStringList positional = parser.positionalArguments();
@@ -85,6 +94,21 @@ int main(int argc, char *argv[]) {
     options.includeMicrophone = !parser.isSet(noMicrophoneOption);
     options.maxOutputFrames = parser.isSet(framesOption) ? parser.value(framesOption).toInt() : 0;
     options.startMs = parser.value(startOption).toDouble();
+    // Unset blur options stay negative, which means "keep the project's value".
+    auto blurValue = [&](const QCommandLineOption &option) {
+        if (!parser.isSet(option))
+            return -1.0;
+        bool valid = false;
+        const double value = parser.value(option).toDouble(&valid);
+        return valid && value >= 0.0 ? value : -1.0;
+    };
+    options.motionBlur.amount = blurValue(blurOption);
+    options.motionBlur.cursorAmount = blurValue(blurCursorOption);
+    options.motionBlur.screenMoveAmount = blurValue(blurMoveOption);
+    options.motionBlur.screenZoomAmount = blurValue(blurZoomOption);
+    // The strength factor is fps / 60 relative to the reference's 60 fps, so the
+    // export frame rate decides it rather than a project setting.
+    options.motionBlur.fps = fps;
 
     QElapsedTimer timer;
     timer.start();

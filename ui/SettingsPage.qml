@@ -522,6 +522,45 @@ Item {
                 PanelCard {
                     Layout.fillWidth: true
                     visible: page.section === "motion"
+                    title: "动态模糊"
+                    resetKeys: ["motionBlurAmount", "motionBlurCursorAmount", "motionBlurScreenMoveAmount", "motionBlurScreenZoomAmount"]
+
+                    UiSlider {
+                        Layout.fillWidth: true
+                        label: "总强度"
+                        detail: "画面与指针移动时的轻微拖影；0 关闭。观感尚未与参考逐帧对照"
+                        from: 0; to: 2; step: 0.05; decimals: 2
+                        value: Number(settings.current.motionBlurAmount || 0)
+                        onEdited: v => page.setSlider("motionBlurAmount", v)
+                    }
+                    UiSlider {
+                        Layout.fillWidth: true
+                        label: "指针移动"
+                        from: 0; to: 2; step: 0.05; decimals: 2
+                        value: Number(settings.current.motionBlurCursorAmount || 0)
+                        onEdited: v => page.setSlider("motionBlurCursorAmount", v)
+                    }
+                    UiSlider {
+                        Layout.fillWidth: true
+                        label: "画面平移"
+                        detail: "画面滑动时拖影；镜头缩放时由下一项接管"
+                        from: 0; to: 2; step: 0.05; decimals: 2
+                        value: Number(settings.current.motionBlurScreenMoveAmount || 0)
+                        onEdited: v => page.setSlider("motionBlurScreenMoveAmount", v)
+                    }
+                    UiSlider {
+                        Layout.fillWidth: true
+                        label: "画面缩放"
+                        detail: "放大或缩小时拖影"
+                        from: 0; to: 2; step: 0.05; decimals: 2
+                        value: Number(settings.current.motionBlurScreenZoomAmount || 0)
+                        onEdited: v => page.setSlider("motionBlurScreenZoomAmount", v)
+                    }
+                }
+
+                PanelCard {
+                    Layout.fillWidth: true
+                    visible: page.section === "motion"
                     title: "画面与点击弹簧"
                     resetKeys: ["screenMovementSpring", "mouseClickSpring"]
 

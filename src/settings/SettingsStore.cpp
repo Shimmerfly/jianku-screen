@@ -54,6 +54,14 @@ QVariantMap referenceFactory() {
         {"alwaysKeepZoomedIn", false},
         {"snapToEdgesRatio", 0.25},
         {"glideSpeed", 0.5},
+        // Motion blur: the reference's base configuration is 1 for the global
+        // amount and for each of the three channels. The appearance has not been
+        // compared against reference output frames yet, so the UI labels it as
+        // pending verification rather than settled.
+        {"motionBlurAmount", 1.0},
+        {"motionBlurCursorAmount", 1.0},
+        {"motionBlurScreenMoveAmount", 1.0},
+        {"motionBlurScreenZoomAmount", 1.0},
         {"hideCamera", true},
         {"cameraSize", 0.35},
         {"cameraRoundness", 0.25},

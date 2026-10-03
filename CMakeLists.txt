@@ -28,6 +28,8 @@ qt_add_executable(jianku-screen MACOSX_BUNDLE
     src/project/ProjectTimeline.cpp
     src/render/ProjectCompositor.cpp
     src/render/ProjectCompositor.h
+    src/render/MotionBlur.cpp
+    src/render/MotionBlur.h
     src/render/CanvasLayout.cpp
     src/render/CanvasLayout.h
     src/render/ExportController.cpp
@@ -101,11 +103,16 @@ if(BUILD_TESTING)
     target_link_libraries(capture-source-tests PRIVATE Qt6::Core)
     add_test(NAME capture-source COMMAND capture-source-tests)
 
+    add_executable(motion-blur-tests tests/MotionBlurTests.cpp src/render/MotionBlur.cpp)
+    target_link_libraries(motion-blur-tests PRIVATE Qt6::Core Qt6::Gui)
+    add_test(NAME motion-blur COMMAND motion-blur-tests)
+
     add_executable(compositor-tests tests/CompositorTests.cpp
         src/render/ProjectCompositor.cpp src/render/CanvasLayout.cpp
         src/animation/AnimationSettings.cpp src/animation/AutoFocusEngine.cpp
         src/animation/AutomaticZoom.cpp src/animation/CursorEngine.cpp
-        src/animation/SpringSolver.cpp src/capture/CaptureSource.cpp)
+        src/animation/SpringSolver.cpp src/capture/CaptureSource.cpp
+        src/render/MotionBlur.cpp)
     target_link_libraries(compositor-tests PRIVATE Qt6::Core Qt6::Gui)
     target_compile_definitions(compositor-tests PRIVATE
         JIANKU_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
@@ -116,7 +123,8 @@ if(BUILD_TESTING)
         src/render/ExportController.cpp src/render/ProjectCompositor.cpp
         src/render/CanvasLayout.cpp src/animation/AnimationSettings.cpp
         src/animation/AutoFocusEngine.cpp src/animation/AutomaticZoom.cpp
-        src/animation/CursorEngine.cpp src/animation/SpringSolver.cpp)
+        src/animation/CursorEngine.cpp src/animation/SpringSolver.cpp
+        src/render/MotionBlur.cpp)
     target_link_libraries(export-controller-tests PRIVATE Qt6::Core Qt6::Gui)
     target_compile_definitions(export-controller-tests PRIVATE
         JIANKU_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
@@ -130,6 +138,8 @@ qt_add_executable(jianku-compose
     src/render/ComposeMain.cpp
     src/render/ProjectCompositor.cpp
     src/render/ProjectCompositor.h
+    src/render/MotionBlur.cpp
+    src/render/MotionBlur.h
     src/render/CanvasLayout.cpp
     src/render/CanvasLayout.h
     src/animation/AnimationSettings.cpp

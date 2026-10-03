@@ -79,6 +79,9 @@ bool ExportController::start(const QString &outputPath, bool includeCursor,
     options.includeAutoZoom = includeAutoZoom;
     options.includeAudio = includeAudio;
     options.includeMicrophone = includeMicrophone;
+    // The strength factor is fps / 60 relative to the reference's 60 fps, so it
+    // follows the export frame rate. Everything else stays as the project saved it.
+    options.motionBlur.fps = options.fps;
     options.shouldCancel = [this] { return cancelRequested_.load(); };
 
     const QString target = options.outputPath;
