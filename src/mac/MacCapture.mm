@@ -54,7 +54,14 @@ void postToOwner(const std::shared_ptr<CallbackGate> &gate,
 QString errorText(NSError *error) {
     if (!error)
         return QStringLiteral("未知屏幕采集错误");
-    return QString::fromNSString(error.localizedDescription);
+    // Some NSErrors carry no useful description ("The operation could not be
+    // completed"), which is what one broken project recorded. Falling back to the
+    // domain and code at least makes the failure identifiable later.
+    const QString description = QString::fromNSString(error.localizedDescription);
+    const QString domain = QString::fromNSString(error.domain);
+    if (description.isEmpty())
+        return QStringLiteral("%1 错误 %2").arg(domain).arg(error.code);
+    return QStringLiteral("%1（%2 %3）").arg(description, domain).arg(error.code);
 }
 
 QSize displayPixelSize(SCDisplay *display) {
@@ -74,6 +81,14 @@ qint64 timeNs(CMTime time) {
 QRectF QRectFFromCGRect(CGRect rect) {
     return QRectF(rect.origin.x, rect.origin.y, rect.size.width, rect.size.height);
 }
+
+// How often the frame timeline is forced to disk. A recording that dies without
+// reaching endRecording keeps whatever was flushed, so this is the granularity of
+// what a crash can cost — it matches the movie fragment interval so the picture and
+// the frame times stay in step. Probed: without a flush the file is *empty* after a
+// kill (Qt keeps the whole thing in user space), and with one it keeps everything up
+// to the last flush (see .dsh/unattended/evidence/fragmented-writer.md).
+constexpr int kTimelineFlushEveryFrames = 60;
 
 // Used for diagnostics only; the manifest records the source kind and rect, not
 // this string, so a renamed window never invalidates an existing recording.
@@ -182,6 +197,9 @@ QJsonObject jsonFromDictionary(NSDictionary *dictionary) {
     CVPixelBufferRef lastRecordedFrame;
     std::unique_ptr<QFile> frameTimeline;
     bool timelineHealthy;
+    // Frames written since the last forced flush, so a killed recording still has a
+    // frame timeline that matches the video fragments on disk.
+    qint64 framesSinceFlush;
     NSMutableArray<NSDictionary *> *pauseRanges;
     std::function<void(QString, QString, QJsonObject)> recordingFinished;
 }
@@ -199,6 +217,15 @@ QJsonObject jsonFromDictionary(NSDictionary *dictionary) {
         fileType:AVFileTypeMPEG4 error:error];
     if (!newWriter)
         return NO;
+    // Fragment the movie so a recording survives the process dying. Without this
+    // the index (`moov`) is only written by finishWriting, and a recording killed
+    // by a crash, a power cut or a forced quit leaves a file that no decoder will
+    // open at all — one exists in ~/Movies from 2026-10-03 23:27 with 28 MB of
+    // perfectly good H.264 in it and no way to read a single frame. Probed both
+    // ways (see .dsh/unattended/evidence/fragmented-writer.md): plain writing is
+    // unreadable after a kill, fragmented writing plays back up to the last
+    // completed fragment. One second is the granularity of what can be lost.
+    newWriter.movieFragmentInterval = CMTimeMake(1, 1);
     const int pixels = size.width() * size.height();
     NSDictionary *compression = @{
         AVVideoAverageBitRateKey: @(std::clamp(pixels * 6, 12000000, 36000000)),
@@ -253,6 +280,7 @@ QJsonObject jsonFromDictionary(NSDictionary *dictionary) {
         frameTimeline = std::make_unique<QFile>(QFileInfo(QString::fromNSString(url.path)).path()
             + QStringLiteral("/video-frames.jsonl"));
         if (!frameTimeline->open(QIODevice::WriteOnly)) return;
+        framesSinceFlush = 0;
         writer = newWriter;
         videoInput = input;
         videoAdaptor = adaptor;
@@ -537,6 +565,14 @@ QJsonObject jsonFromDictionary(NSDictionary *dictionary) {
                     {"sourcePtsNs", QString::number(timeNs(timestamp))}, {"displayHostTimeNs", QString::number(displayNs)},
                     {"receivedHostTimeNs", QString::number(receiveNs)}, {"displayTimeAvailable", displayTime != nil}}).toJson(QJsonDocument::Compact) + '\n';
                 timelineHealthy &= frameTimeline->write(line) == line.size();
+                // Forced to disk periodically rather than only at the end: a crash
+                // leaves the video fragments readable, and a frame timeline that is
+                // empty or truncated would make the project unloadable anyway
+                // (`loadProject` refuses a project whose frame timeline is empty).
+                if (++framesSinceFlush >= kTimelineFlushEveryFrames) {
+                    timelineHealthy &= frameTimeline->flush();
+                    framesSinceFlush = 0;
+                }
             }
         } else {
             ++droppedFrameCount;

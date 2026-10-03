@@ -5,7 +5,7 @@
 - 项目根：`/Users/moyingxz/Documents/Zzx/05_项目开发/Jianku Screen`
 - 验证命令：`cd build && cmake --build . -j8 && ctest --output-on-failure`
 - 运行日志：`.dsh/unattended/`
-- 上次更新：2026-10-04 04:20
+- 上次更新：2026-10-04 04:45
 
 ## 授权边界（本次无人值守）
 
@@ -13,14 +13,14 @@
 不做（等用户回来决定）：`git push`、改 CI、装系统级软件、**修改或删除用户的录制素材**。
 额外约束：本仓库为**私有本地仓库**，不做任何远端配置。
 
-## 现状（2026-10-04 04:20）
+## 现状（2026-10-04 04:45）
 
 - 构建：`cmake --build build -j8` 通过，warning 归零。
 - 测试：`ctest` **13/13** 通过（timeline-boundaries、spring-solver、cursor-engine、
   auto-focus、media-clock、canvas-layout、capture-source、motion-blur、compositor、
   export-controller、canvas-renderer、edit-timeline、timeline-controller）。
-- 版本历史：基线 `85af2cd`；此后 15 个提交，均在本地。
-- 本轮（04:20 前后）做了 5 件事，见 Q13–Q17。
+- 版本历史：基线 `85af2cd`；此后 16 个提交，均在本地。
+- 本轮（04:20 前后）做了 6 件事，见 Q13–Q18。
 - 权限：approval=never / danger-full-access，无人值守期间无审批阻塞。
 - 工作区无其他执行体（Trae 停在 23:38，报的是模型侧 4054，不是代码错误）。
 
@@ -185,6 +185,31 @@ CLI 加 `--cut/--speed/--trim-from/--trim-to`，按固定顺序（先变速、�
 验证：`ctest` 13/13，新增 `timeline-controller`（加载与拒绝、操作与历史、
 失败不改动、输出时间语义、空控制器）。提交 `fe14e8e`。
 
+### Q18 录制中途被杀 → 整个文件报废（真实损坏案例） ✅
+结论：`~/Movies` 里那个 `2026-10-03 23-27-15-049.jianku` 是真实损坏：
+28.3MB 的 `raw.mp4`，顶层只有 `ftyp wide mdat`，`moov`/`moof`/`mfra`/`sidx` 全 0 次，
+`state=failed`。因为索引是 `finishWriting` 才写的，进程没走到那一步，
+**一个解码器都打不开**——不是丢最后几帧，是 28MB 全丢。
+
+写了探针直接对比（`probe.mm`/`probe2.mm`/`probe3.mm` + QFile 三连）：
+- 普通写法，MPEG-4 与 QuickTime 两种容器，被杀后**都完全打不开** → **换容器没用**。
+- `movieFragmentInterval = 1s` 后被杀 → **可播**，时长正确；
+  正常结束时也无副作用（`status=completed`、时长对、完整解码无错）。
+- 只修视频不够：`video-frames.jsonl` 用 QFile 逐行写而 Qt 把数据留在用户态缓冲，
+  实测写 100 行不 flush 直接退出 → **文件 0 行 0 字节**（工程仍然加载不了）。
+  周期 flush 的代价可忽略（10 次 0.2ms），丢失量正好是最后一个 flush 周期。
+
+改动：`MacCapture.mm` 加 `movieFragmentInterval = 1s`；
+帧时间线每 60 帧强制 flush（与分片间隔对齐，两边丢的范围一致）；
+`errorText()` 在 NSError 描述为空时退回 domain + code，
+不再只记下 "The operation could not be completed"。
+验证：`ctest` 13/13；用「被杀的分片文件」当素材跑完整合成——60 帧进 / 60 帧出 /
+回读 60 / 时长 2.000s；真实录制重封装成分片后 ffprobe 读到 6.900s、360 包。
+证据：`.dsh/unattended/evidence/fragmented-writer.md`。
+**未做**：崩溃留下的工程现在视频可读但 `state` 仍是 `failed`，
+要不要开机扫描修复需要先定行为，留给用户。那个已损坏的文件救不回来（只解析出 371KB），
+也没有动它。
+
 ## 待用户验证（无人值守期间做不了）
 
 按重要性排序。前两项直接影响能不能继续往下做。
@@ -211,9 +236,9 @@ CLI 加 `--cut/--speed/--trim-from/--trim-to`，按固定顺序（先变速、�
 ## 明确未做
 
 - **编辑器与时间线 UI**（模型与控制器已完成并可导出，缺的是界面）。
-- **分片写入**：参考工程的每个通道是 `.m4s` 分片 + `.m3u8` 索引，进程被杀只损失
-  最后一片；本仓库是单个 `AVAssetWriter` 写一个 MP4，中途被杀就丢掉全部
-  （本机那个坏掉的 23-27-15-049 工程正是这个后果）。已列为下一项。
+- **崩溃工程的自动修复**：分片写入后视频能读了（Q18），但 `state` 仍是 `failed`，
+  且 `video-frames.jsonl` 可能比视频少最多 1 秒。要不要在启动时扫描并修复这类工程
+  （自动修 / 提示用户 / 不处理）需要先定行为。
 - 摄像头、字幕、快捷键显示、点击音效、背景音乐。
 - 演示模式的实时合成输出（当前只对录制工程离线合成）。
 - Windows 侧捕获适配器。
