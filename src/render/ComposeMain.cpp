@@ -44,13 +44,15 @@ int main(int argc, char *argv[]) {
     const QCommandLineOption noZoomOption(QStringLiteral("no-auto-zoom"),
         QStringLiteral("不使用自动缩放区间（用于对照）"));
     const QCommandLineOption noAudioOption(QStringLiteral("no-audio"),
-        QStringLiteral("不封装系统声音轨"));
+        QStringLiteral("不封装任何音轨"));
+    const QCommandLineOption noMicrophoneOption(QStringLiteral("no-microphone"),
+        QStringLiteral("只封装系统声音，不混入麦克风"));
     const QCommandLineOption framesOption(QStringLiteral("frames"),
         QStringLiteral("只合成前 N 帧，用于冒烟验证"), QStringLiteral("n"));
     const QCommandLineOption startOption(QStringLiteral("start-ms"),
         QStringLiteral("从第几毫秒开始合成"), QStringLiteral("ms"), QStringLiteral("0"));
     parser.addOptions({outputOption, fpsOption, backgroundOption, ffmpegOption, noCursorOption,
-        noZoomOption, noAudioOption, framesOption, startOption});
+        noZoomOption, noAudioOption, noMicrophoneOption, framesOption, startOption});
     parser.process(app);
 
     const QStringList positional = parser.positionalArguments();
@@ -80,6 +82,7 @@ int main(int argc, char *argv[]) {
     options.includeCursor = !parser.isSet(noCursorOption);
     options.includeAutoZoom = !parser.isSet(noZoomOption);
     options.includeAudio = !parser.isSet(noAudioOption);
+    options.includeMicrophone = !parser.isSet(noMicrophoneOption);
     options.maxOutputFrames = parser.isSet(framesOption) ? parser.value(framesOption).toInt() : 0;
     options.startMs = parser.value(startOption).toDouble();
 
@@ -113,7 +116,12 @@ int main(int argc, char *argv[]) {
         << "帧数：" << result.writtenFrames << "（成片回读 " << result.encodedFrames
         << "，源时间轴 " << result.sourceFrames << " 帧）\n"
         << "时长：" << QString::number(result.durationMs / 1000.0, 'f', 3) << " 秒\n"
-        << "音轨：" << (result.audioMuxed ? "已封装系统声音（直接复制，未重编码）" : "无") << '\n'
+        << "音轨：" << (result.microphoneMuxed
+               ? QStringLiteral("系统声音 + 麦克风（已按 %1 ms 对齐后混音）")
+                     .arg(QString::number(result.microphoneDelayMs, 'f', 1))
+               : result.audioMuxed ? QStringLiteral("仅系统声音（直接复制，未重编码）")
+                                   : QStringLiteral("无"))
+        << '\n'
         << "耗时：" << QString::number(seconds, 'f', 1) << " 秒（"
         << QString::number(result.writtenFrames / std::max(0.001, seconds), 'f', 1) << " 帧/秒）\n";
     return 0;

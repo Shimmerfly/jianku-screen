@@ -12,6 +12,9 @@
 - (void)resume;
 - (void)stop;
 - (NSString *)lastError;
+// Track info for project.json: file name, duration and the host-clock start.
+// The start time is what lets the exporter align the microphone with the video
+// timeline instead of guessing from durations alone.
 - (NSDictionary *)metadata;
 
 @end

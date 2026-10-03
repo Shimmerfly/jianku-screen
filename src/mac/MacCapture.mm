@@ -76,6 +76,24 @@ bool writeProject(const QString &directory, const QJsonObject &manifest) {
     const auto bytes = QJsonDocument(manifest).toJson();
     return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size() && file.commit();
 }
+
+// Objective-C containers are not QJsonValue-convertible. Handing an NSDictionary
+// straight to QJsonObject::insert() silently stores a bool: every microphone
+// manifest written so far says `"microphone": true` instead of the track info,
+// because the implicit conversion picks a pointer-to-bool overload. Round-trip
+// through NSJSONSerialization so the structure actually survives.
+QJsonObject jsonFromDictionary(NSDictionary *dictionary) {
+    if (![dictionary isKindOfClass:[NSDictionary class]] || dictionary.count == 0)
+        return {};
+    if (![NSJSONSerialization isValidJSONObject:dictionary])
+        return {};
+    NSData *data = [NSJSONSerialization dataWithJSONObject:dictionary options:0 error:nil];
+    if (!data)
+        return {};
+    const QJsonDocument document = QJsonDocument::fromJson(
+        QByteArray(reinterpret_cast<const char *>(data.bytes), static_cast<int>(data.length)));
+    return document.isObject() ? document.object() : QJsonObject{};
+}
 } // namespace
 
 @interface JiankuStreamReceiver : NSObject <SCStreamOutput, SCStreamDelegate> {
@@ -979,7 +997,7 @@ void MacCapture::stopRecording() {
     setRecordingPaused(false);
     impl_->projectManifest.insert("pointer", impl_->pointerRecorder.stop());
     if (impl_->micRecorder) {
-        impl_->projectManifest.insert("microphone", [impl_->micRecorder metadata]);
+        impl_->projectManifest.insert("microphone", jsonFromDictionary([impl_->micRecorder metadata]));
         [impl_->micRecorder stop];
         impl_->micRecorder = nil;
     }

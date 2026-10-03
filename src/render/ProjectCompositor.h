@@ -42,6 +42,21 @@ struct ZoomRangeEntry {
     double snapToEdgesRatio = 0.25;
 };
 
+// The microphone track, recorded separately as microphone.m4a.
+//
+// It is kept as its own file so it stays re-editable, which means the exporter
+// has to align it. The recorder stamps `startHostTimeNs` on the same host clock
+// the video frames use; both timelines fold out the same pause intervals, so the
+// two stay a constant offset apart for the whole recording and a single delay is
+// enough to line them up.
+struct MicrophoneTrack {
+    bool present = false;
+    QString file;
+    double durationMs = 0.0;
+    qint64 startHostTimeNs = 0;   // 0 when the recording predates this field
+    bool startKnown = false;
+};
+
 // Everything the compositor needs, loaded and validated once. Nothing here is
 // platform specific, so it is fully testable without a capture device.
 struct ProjectData {
@@ -53,13 +68,21 @@ struct ProjectData {
 
     QSizeF sourceSize;          // captured pixels
     double durationMs = 0.0;
+    qint64 mediaZeroHostNs = 0;
     QString videoFile;
+    MicrophoneTrack microphone;
 
     std::vector<double> frameMediaMs;            // one entry per recorded frame
     std::vector<Animation::InputEvent> events;   // source-pixel coordinates
     std::vector<CursorObservation> cursorObservations;
     QHash<QString, CursorDefinition> cursors;
     std::vector<ZoomRangeEntry> zoomRanges;
+
+    // Microphone delay in milliseconds, or 0 when it cannot be determined.
+    // Positive means the microphone has to be held back to line up with the
+    // video, which is the usual case: the recorder starts it before the first
+    // frame arrives.
+    double microphoneDelayMs() const;
 };
 
 // Loads a recorded project directory. Fails loudly instead of composing a
@@ -179,6 +202,13 @@ struct ComposeOptions {
     bool includeCursor = true;
     bool includeAutoZoom = true;
     bool includeAudio = true;
+    // Mix the separately recorded microphone track into the output. Ignored when
+    // the project has no microphone.m4a; see `ComposeResult::microphoneMuxed`.
+    bool includeMicrophone = true;
+    // Mix levels, applied only on the microphone path (the system-only path is a
+    // stream copy and stays untouched).
+    double systemAudioVolume = 1.0;
+    double microphoneVolume = 1.0;
     int maxOutputFrames = 0;     // 0 = the whole clip (used by smoke tests)
     double startMs = 0.0;
     // Polled once per frame. Returning true stops the export and leaves the
@@ -203,6 +233,9 @@ struct ComposeResult {
     int height = 0;
     double durationMs = 0.0;
     bool audioMuxed = false;
+    // True when microphone.m4a was mixed in, and the offset that was applied.
+    bool microphoneMuxed = false;
+    double microphoneDelayMs = 0.0;
     QString decoderLog;
     QString encoderLog;
 };

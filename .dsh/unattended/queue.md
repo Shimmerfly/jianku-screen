@@ -45,8 +45,17 @@
 `ffmpeg -f null -` 完整解码一遍无错误，时长 124.667s，体积 37.8MB。
 产物副本：`build/composed-demo-22-46-50-891.mp4`（build/ 已 gitignore，不入库）。
 
-### Q9 合成器只有命令行入口，没接进 UI
-判据：应用内能对最近一次录制触发合成，并显示进度与产物路径。
+### Q9 合成器只有命令行入口，没接进 UI ✅
+结论：新增 `src/render/ExportController.{h,cpp}`，把同步的 `composeProject()` 放到工作
+线程，进度经队列信号回 QML；主工具栏加「导出成片」按钮 + 预览区底部进度条，
+完成后自动在 Finder 定位产物。`ComposeOptions` 增加 `shouldCancel` 轮询
+（取消不是失败，UI 不报错）。
+顺带修掉一个真实环境问题：Finder 启动的应用只继承 `/usr/bin:/bin:/usr/sbin:/sbin`，
+Homebrew 的 ffmpeg 按名字根本找不到；ffmpeg/ffprobe 定位抽成
+`findFfmpeg()` / `findFfprobe()`。
+验证：新增 `export-controller-tests` 端到端跑真实管线（ffmpeg 现造 30 帧源视频 →
+控制器导出 → 回读成片确认 60 个输出帧）；空工程目录被拒绝而不是假装导出。
+应用启动无 QML 报错。提交 `e6b80bc`。
 
 ### Q10 麦克风轨 `microphone.m4a` 未并入成片
 判据：合成输出同时带系统声音与麦克风，且两者时间对齐（需要先确认混音策略）。

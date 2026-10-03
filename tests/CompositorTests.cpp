@@ -120,7 +120,6 @@ struct Fixture {
         write(root + "/cursors.json", QJsonDocument(QJsonObject{{cursorId, QJsonObject{
             {"image", "cursor-a.png"}, {"widthPx", 4}, {"heightPx", 4},
             {"hotSpotXPx", 0}, {"hotSpotYPx", 0}}}}).toJson());
-
         write(root + "/automatic-zooms.json", QJsonDocument(QJsonObject{
             {"ranges", QJsonArray{QJsonObject{
                 {"startTimeMs", 500.0}, {"endTimeMs", 1500.0}, {"zoom", 2.0},
@@ -150,6 +149,57 @@ int main(int argc, char **argv) {
         require(project.cursorObservations.size() == 1, "in-video cursor observations kept");
         require(project.zoomRanges.size() == 1, "zoom range read");
         require(close(project.zoomRanges.front().zoom, 2.0), "zoom level read");
+
+        // Legacy projects stored `"microphone": true` because an NSDictionary was
+        // handed to QJsonObject::insert and silently became a bool. The loader has
+        // to understand both shapes or those recordings look like they have no
+        // microphone at all.
+        {
+            require(!project.microphone.present, "no microphone.m4a on disk means no track");
+            require(close(project.microphoneDelayMs(), 0.0), "no offset without a microphone");
+
+            write(fixture.root + "/microphone.m4a", QByteArray("placeholder"));
+            // Rebuild the manifest in its legacy bool form.
+            QString manifest = QString::fromUtf8([&] {
+                QFile file(fixture.root + "/project.json");
+                if (!file.open(QIODevice::ReadOnly))
+                    throw std::runtime_error("manifest open");
+                return file.readAll();
+            }());
+            const int marker = manifest.indexOf(QStringLiteral("\"video\""));
+            require(marker > 0, "manifest has a video section");
+            manifest.insert(marker, QStringLiteral("\"microphone\": true, "));
+            write(fixture.root + "/project.json", manifest.toUtf8());
+            const ProjectData legacyProject = loadProject(fixture.root, &error);
+            require(legacyProject.valid, "legacy manifest still loads");
+            require(legacyProject.microphone.present,
+                "a bare `true` still finds microphone.m4a");
+            require(!legacyProject.microphone.startKnown,
+                "the legacy form has no start time to align with");
+            require(close(legacyProject.microphoneDelayMs(), 0.0),
+                "an unknown start time yields no offset");
+
+            // New form: the recorder stamps the host clock.
+            const QJsonObject modern{{"microphone", QJsonObject{
+                {"file", "microphone.m4a"}, {"durationMs", 2000.0},
+                {"startHostTimeNs", "1600000"}}}};
+            QJsonParseError parseError;
+            QJsonObject rebuilt = QJsonDocument::fromJson(
+                QByteArray(manifest.toUtf8()), &parseError).object();
+            rebuilt.insert(QStringLiteral("microphone"), modern.value(QStringLiteral("microphone")));
+            write(fixture.root + "/project.json", QJsonDocument(rebuilt).toJson());
+            const ProjectData modernProject = loadProject(fixture.root, &error);
+            require(modernProject.valid
+                    && modernProject.microphone.present
+                    && modernProject.microphone.startKnown,
+                "the modern manifest keeps the microphone track info");
+            // mediaZeroHostTimeNs is 1000, microphone started at 1600000 ns.
+            require(close(modernProject.microphoneDelayMs(), 1.599),
+                "the offset is measured against the first video frame");
+            require(fixture.build() && loadProject(fixture.root, &error).valid,
+                "fixture restored");
+            project = loadProject(fixture.root, &error);
+        }
 
         {
             ProjectData missing = loadProject(fixture.root + "/nope");

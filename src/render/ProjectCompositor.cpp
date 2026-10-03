@@ -271,6 +271,31 @@ ProjectData loadProject(const QString &directory, QString *errorOut) {
     data.durationMs = number(video, "durationNs") / 1e6;
     if (!(data.durationMs > 0.0))
         return fail(QStringLiteral("project.json 的时长无效"));
+    data.mediaZeroHostNs = static_cast<qint64>(number(video, "mediaZeroHostTimeNs"));
+
+    // The microphone is a separate track. Older recordings stored a bare `true`
+    // here (an NSDictionary was handed to QJsonObject::insert and silently became
+    // a bool), so both shapes are accepted and the file is found on disk.
+    const QJsonValue microphoneValue = manifest.value(QStringLiteral("microphone"));
+    if (microphoneValue.isObject()) {
+        const QJsonObject microphone = microphoneValue.toObject();
+        data.microphone.file = microphone.value(QStringLiteral("file")).toString();
+        data.microphone.durationMs = number(microphone, "durationMs");
+        const qint64 start = static_cast<qint64>(number(microphone, "startHostTimeNs"));
+        data.microphone.startKnown = start > 0;
+        data.microphone.startHostTimeNs = start;
+    } else if (microphoneValue.isBool() && microphoneValue.toBool()) {
+        data.microphone.file = QStringLiteral("microphone.m4a");
+    }
+    if (!data.microphone.file.isEmpty()) {
+        const QString microphonePath = directory + QLatin1Char('/') + data.microphone.file;
+        if (QFileInfo::exists(microphonePath)) {
+            data.microphone.present = true;
+        } else {
+            // Declared but missing: keep it non-fatal, the video is still usable.
+            data.microphone.file.clear();
+        }
+    }
 
     // Frames: the recorded media times are the reference for the timeline.
     std::vector<QJsonObject> frames;
@@ -375,8 +400,16 @@ ProjectData loadProject(const QString &directory, QString *errorOut) {
     return data;
 }
 
-const CursorDefinition *cursorAt(const ProjectData &project, double mediaTimeMs) {
-    if (project.cursors.isEmpty())
+double ProjectData::microphoneDelayMs() const {
+    if (!microphone.present || !microphone.startKnown || mediaZeroHostNs <= 0)
+        return 0.0;
+    // Both clocks fold out the same pauses, so the offset is constant. A negative
+    // result (microphone started after the first frame) is kept as-is: it means
+    // the track has to be advanced instead.
+    return (microphone.startHostTimeNs - mediaZeroHostNs) / 1e6;
+}
+
+const CursorDefinition *cursorAt(const ProjectData &project, double mediaTimeMs) {    if (project.cursors.isEmpty())
         return nullptr;
     const CursorObservation *chosen = nullptr;
     for (const CursorObservation &observation : project.cursorObservations) {
@@ -760,8 +793,19 @@ ComposeResult composeProject(const ComposeOptions &options, const ComposeProgres
     }
 
     // --- encoder -----------------------------------------------------------
-    // Video arrives on stdin; the audio track is copied straight out of the
-    // recording so no re-encode touches it.
+    // Input 0 is the composited video arriving on stdin. The recorded tracks are
+    // additional inputs: 1 is the system audio inside raw.mp4, 2 (when present)
+    // is microphone.m4a.
+    //
+    // With only the system track the audio can be stream-copied. Mixing in the
+    // microphone needs a real filter graph, so that path re-encodes the audio
+    // once — there is no way to combine two AAC streams without decoding them.
+    const bool useMicrophone = options.includeAudio && options.includeMicrophone
+        && context.project.microphone.present;
+    const double microphoneDelayMs = context.project.microphoneDelayMs();
+    result.microphoneMuxed = useMicrophone;
+    result.microphoneDelayMs = useMicrophone ? microphoneDelayMs : 0.0;
+
     QProcess encoder;
     QStringList encoderArgs{
         QStringLiteral("-v"), QStringLiteral("error"),
@@ -773,20 +817,49 @@ ComposeResult composeProject(const ComposeOptions &options, const ComposeProgres
     };
     if (options.includeAudio)
         encoderArgs << QStringLiteral("-i") << videoPath(context.project);
+    if (useMicrophone) {
+        // A microphone that started after the first frame is trimmed instead of
+        // delayed: adelay cannot pull a track earlier.
+        if (microphoneDelayMs < -1.0)
+            encoderArgs << QStringLiteral("-ss")
+                        << QString::number(-microphoneDelayMs / 1000.0, 'f', 6);
+        encoderArgs << QStringLiteral("-i")
+                    << context.project.directory + QLatin1Char('/') + context.project.microphone.file;
+    }
     encoderArgs << QStringLiteral("-map") << QStringLiteral("0:v:0");
-    if (options.includeAudio)
+    if (options.includeAudio && !useMicrophone)
         encoderArgs << QStringLiteral("-map") << QStringLiteral("1:a:0?");
+    if (useMicrophone) {
+        // Hold the microphone back by the measured offset so it lands on the same
+        // clock as the video, then mix. normalize=0 keeps the levels as recorded
+        // instead of halving both tracks the way amix does by default.
+        const qint64 holdMs = microphoneDelayMs > 0.0 ? qint64(std::llround(microphoneDelayMs)) : 0;
+        const QString graph = QStringLiteral(
+            "[1:a]volume=%1[sys];"
+            "[2:a]adelay=%2:all=1,volume=%3[mic];"
+            "[sys][mic]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[aout]")
+            .arg(options.systemAudioVolume, 0, 'f', 3)
+            .arg(holdMs)
+            .arg(options.microphoneVolume, 0, 'f', 3);
+        encoderArgs << QStringLiteral("-filter_complex") << graph
+                    << QStringLiteral("-map") << QStringLiteral("[aout]");
+    }
     encoderArgs << QStringLiteral("-c:v") << QStringLiteral("libx264")
                 << QStringLiteral("-preset") << QStringLiteral("veryfast")
                 << QStringLiteral("-crf") << QStringLiteral("18")
                 << QStringLiteral("-pix_fmt") << QStringLiteral("yuv420p")
                 << QStringLiteral("-movflags") << QStringLiteral("+faststart");
     if (options.includeAudio) {
-        // Audio is copied, never re-encoded. Do NOT add -shortest: the source
-        // audio is a little shorter than the video timeline (audio buffers stop
-        // when the last frame is written), and -shortest would trim the composited
-        // video down to the audio length, silently dropping the last frames.
-        encoderArgs << QStringLiteral("-c:a") << QStringLiteral("copy");
+        if (useMicrophone) {
+            encoderArgs << QStringLiteral("-c:a") << QStringLiteral("aac")
+                        << QStringLiteral("-b:a") << QStringLiteral("192k");
+        } else {
+            // Do NOT add -shortest: the source audio is a little shorter than the
+            // video timeline (audio buffers stop when the last frame is written),
+            // and -shortest would trim the video down to the audio length,
+            // silently dropping the last frames.
+            encoderArgs << QStringLiteral("-c:a") << QStringLiteral("copy");
+        }
     }
     encoderArgs << QStringLiteral("-y") << temporaryPath;
 

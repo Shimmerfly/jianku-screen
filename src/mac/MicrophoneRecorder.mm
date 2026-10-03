@@ -2,16 +2,27 @@
 
 #import <CoreMedia/CoreMedia.h>
 
+#include <QtGlobal>
+
+namespace {
+qint64 hostTimeNs() {
+    return CMTimeConvertScale(CMClockGetTime(CMClockGetHostTimeClock()),
+        1000000000, kCMTimeRoundingMethod_RoundHalfAwayFromZero).value;
+}
+}
+
 @implementation MicrophoneRecorder {
     AVAudioRecorder *recorder;
     NSURL *fileURL;
     NSString *lastError;
+    qint64 startHostTimeNs;
 }
 
 - (BOOL)startAtURL:(NSURL *)url {
     [self stop];
     lastError = nil;
     fileURL = url;
+    startHostTimeNs = 0;
 
     NSDictionary *settings = @{
         AVFormatIDKey: @(kAudioFormatMPEG4AAC),
@@ -30,6 +41,9 @@
         recorder = nil;
         return NO;
     }
+    // Recorded after the first successful record() so the timestamp corresponds
+    // to the first sample, on the same host clock the video frames use.
+    startHostTimeNs = hostTimeNs();
     return YES;
 }
 
@@ -63,7 +77,8 @@
     const double durationMs = CMTimeGetSeconds(asset.duration) * 1000.0;
     return @{
         @"file": fileURL.lastPathComponent ?: @"",
-        @"durationMs": @(durationMs)
+        @"durationMs": @(durationMs),
+        @"startHostTimeNs": [NSString stringWithFormat:@"%lld", startHostTimeNs]
     };
 }
 
