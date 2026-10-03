@@ -279,6 +279,80 @@ int main() {
                 "a point left of the region maps off the frame, so it can be filtered");
         }
 
+        // --- pointer mapping --------------------------------------------------
+        // The mapping is where two coordinate systems meet, and getting it wrong puts
+        // the pointer in the wrong place for *some* sources only — a full-primary-
+        // display recording comes out right either way, which is exactly how this
+        // survives testing. So each case is pinned separately.
+        {
+            // A full-display source: 1000x1000 points recorded at 2000x2000 pixels.
+            const QRectF bounds(0.0, 0.0, 1000.0, 1000.0);
+            const QSize pixels(2000, 2000);
+            const double primaryHeight = 1000.0;
+
+            // The centre of the screen is the centre of the frame.
+            const QPointF centre = pointerPixelPosition(
+                QPointF(500.0, 500.0), bounds, pixels, primaryHeight);
+            require(close(centre.x(), 1000.0), "x maps by the bounds width");
+            require(close(centre.y(), 1000.0), "and y by the bounds height");
+
+            // AppKit y is measured up from the bottom, so a *small* y is near the
+            // bottom of the screen — which is a *large* frame y.
+            const QPointF bottom = pointerPixelPosition(
+                QPointF(0.0, 0.0), bounds, pixels, primaryHeight);
+            require(close(bottom.x(), 0.0) && close(bottom.y(), 2000.0),
+                "the AppKit origin lands at the bottom-left of the frame");
+            const QPointF top = pointerPixelPosition(
+                QPointF(0.0, 1000.0), bounds, pixels, primaryHeight);
+            require(close(top.y(), 0.0), "and the top of the screen at the top of the frame");
+            // Mixing the two conventions up would put these two at each other's
+            // positions, which is the bug this check exists for.
+            require(!close(bottom.y(), top.y()), "the two ends are not interchangeable");
+
+            // A region in the middle of the display: the pointer is mapped relative to
+            // the region, so a point at the region's own top-left corner is (0, 0) in
+            // frame pixels.
+            const QRectF region(200.0, 100.0, 400.0, 200.0);
+            // AppKit y for the region's *top* edge: primary height minus the Quartz y.
+            const QPointF regionCorner = pointerPixelPosition(
+                QPointF(200.0, primaryHeight - 100.0), region, QSize(800, 400), primaryHeight);
+            require(close(regionCorner.x(), 0.0) && close(regionCorner.y(), 0.0),
+                "a region's own top-left maps to the frame origin");
+            const QPointF regionCentre = pointerPixelPosition(
+                QPointF(400.0, primaryHeight - 200.0), region, QSize(800, 400), primaryHeight);
+            require(close(regionCentre.x(), 400.0) && close(regionCentre.y(), 200.0),
+                "and its centre to the frame centre");
+
+            // A second display to the right of the primary one: the horizontal offset
+            // comes from the bounds, and the vertical flip still uses the *primary*
+            // display's height, not the second display's.
+            const QRectF secondScreen(2000.0, 0.0, 1000.0, 1000.0);
+            const QPointF onSecond = pointerPixelPosition(
+                QPointF(2500.0, 500.0), secondScreen, QSize(2000, 2000), primaryHeight);
+            require(close(onSecond.x(), 1000.0), "a second display's x is relative to that display");
+            require(close(onSecond.y(), 1000.0), "and its y uses the primary display's height");
+
+            // A source whose pixel size is not its point size (a Retina region, or a
+            // region smaller than the display's scale) still maps by the ratio.
+            const QPointF scaled = pointerPixelPosition(
+                QPointF(500.0, 500.0), bounds, QSize(1000, 500), primaryHeight);
+            require(close(scaled.x(), 500.0), "a 1x pixel size halves the mapped x");
+
+            // Degenerate input must not divide by zero; the caller gets the origin and
+            // can decide what to do with a pointer it cannot place.
+            const QPointF empty = pointerPixelPosition(
+                QPointF(10.0, 10.0), QRectF(), pixels, primaryHeight);
+            require(close(empty.x(), 0.0) && close(empty.y(), 0.0), "an empty rect maps to zero");
+            const QPointF noPixels = pointerPixelPosition(
+                QPointF(10.0, 10.0), bounds, QSize(), primaryHeight);
+            require(close(noPixels.x(), 0.0) && close(noPixels.y(), 0.0), "and so does no pixel size");
+            // A pointer outside the frame is reported as-is, not clamped: the smooth
+            // pointer still has to travel in from the edge.
+            const QPointF outside = pointerPixelPosition(
+                QPointF(-50.0, 500.0), bounds, pixels, primaryHeight);
+            require(outside.x() < 0.0, "a pointer outside the frame is not clamped");
+        }
+
         std::cout << "capture source checks passed\n";
         return 0;
     } catch (const std::exception &error) {

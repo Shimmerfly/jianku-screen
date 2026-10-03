@@ -23,6 +23,7 @@ qt_add_executable(jianku-screen MACOSX_BUNDLE
     src/animation/AutoFocusEngine.cpp
     src/animation/AnimationDriver.cpp
     src/animation/AnimationDriver.h
+    src/capture/CaptureSource.cpp
     src/animation/AnimationSettings.cpp
     src/animation/AnimationSettings.h
     src/project/ProjectTimeline.cpp

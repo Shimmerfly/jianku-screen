@@ -128,6 +128,19 @@ ApplicationWindow {
         target: anim
         function onContentSizeChanged() { root.refreshCanvas() }
     }
+    // The preview has to place the smooth pointer inside the rect that is actually
+    // being captured. Mapping it through the primary display is right only for a
+    // full-primary-display recording; for a window, a region or a second screen it
+    // draws the pointer in the wrong place.
+    Connections {
+        target: capture
+        function onSourceGeometryChanged() {
+            const g = capture.sourceGeometry
+            if (g && g.widthPoints > 0 && g.widthPixels > 0)
+                anim.setSourceGeometry(g.x, g.y, g.widthPoints, g.heightPoints,
+                    g.widthPixels, g.heightPixels)
+        }
+    }
     // The playhead snaps to frames, so the controller has to know the frame rate the
     // export will use. Read from the exporter rather than from a setting, because the
     // exporter is what actually writes the frames.

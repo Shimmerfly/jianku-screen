@@ -732,6 +732,13 @@ void MacCapture::setRunning(bool value) {
         return;
     running_ = value;
     emit runningChanged();
+    // A stopped capture has no geometry to place a pointer in; leaving the last
+    // source's rect around would draw the smooth pointer against a frame that is no
+    // longer on screen.
+    if (!value && !sourceGeometry_.isEmpty()) {
+        sourceGeometry_.clear();
+        emit sourceGeometryChanged();
+    }
 }
 
 void MacCapture::setBusy(bool value) {
@@ -896,6 +903,24 @@ void MacCapture::startSource(const Capture::CaptureSource &source) {
     setBusy(true);
     stopRequested_ = false;
     activeSource_ = resolved;
+    // Publish the geometry the moment it is known, not when the stream starts: the
+    // preview has to place the pointer correctly from the first frame, and the pixel
+    // size is only available here (resolveGeometry just computed it).
+    {
+        // Named `published` rather than `geometry` so it cannot shadow the
+        // CaptureGeometry it is built from.
+        const QVariantMap published{
+            {QStringLiteral("x"), geometry.boundsPoints.x()},
+            {QStringLiteral("y"), geometry.boundsPoints.y()},
+            {QStringLiteral("widthPoints"), geometry.boundsPoints.width()},
+            {QStringLiteral("heightPoints"), geometry.boundsPoints.height()},
+            {QStringLiteral("widthPixels"), geometry.pixelSize.width()},
+            {QStringLiteral("heightPixels"), geometry.pixelSize.height()}};
+        if (sourceGeometry_ != published) {
+            sourceGeometry_ = published;
+            emit sourceGeometryChanged();
+        }
+    }
     for (NSUInteger i = 0; i < impl_->displays.count; ++i) {
         if (impl_->displays[i] == display)
             activeDisplayIndex_ = static_cast<int>(i);

@@ -1,6 +1,7 @@
 #include "AnimationDriver.h"
 #include "AnimationSettings.h"
 
+#include "../capture/CaptureSource.h"
 #include "../mac/MousePoll.h"
 
 #include <QTimer>
@@ -11,6 +12,15 @@ AnimationDriver::AnimationDriver(QObject *parent) : QObject(parent) {
     const QSizeF size = primaryScreenPoints();
     contentWidth_ = size.width();
     contentHeight_ = size.height();
+    primaryHeightPoints_ = size.height();
+    // Until a source is chosen, the content box is the whole primary display, which
+    // is what the old code always assumed.
+    sourceBoundsX_ = 0.0;
+    sourceBoundsY_ = 0.0;
+    sourceBoundsWidth_ = size.width();
+    sourceBoundsHeight_ = size.height();
+    sourcePixelWidth_ = size.width();
+    sourcePixelHeight_ = size.height();
     cursor_.setSettings(cursorSettings_);
     camScaleSpring_.setConfig(screenSpring_);
     camXSpring_.setConfig(screenSpring_);
@@ -71,6 +81,28 @@ void AnimationDriver::setSettings(const QVariantMap &settings) {
     cursor_.setSettings(cursorSettings_);
 }
 
+void AnimationDriver::setSourceGeometry(double x, double y, double widthPoints,
+    double heightPoints, double widthPixels, double heightPixels) {
+    if (!(widthPoints > 0.0) || !(heightPoints > 0.0)
+        || !(widthPixels > 0.0) || !(heightPixels > 0.0))
+        return;
+    sourceBoundsX_ = x;
+    sourceBoundsY_ = y;
+    sourceBoundsWidth_ = widthPoints;
+    sourceBoundsHeight_ = heightPoints;
+    sourcePixelWidth_ = widthPixels;
+    sourcePixelHeight_ = heightPixels;
+    // The preview draws in source *points* (the frame is scaled to fit anyway), so
+    // the content box is the recorded rect's size. The pixel size is kept because a
+    // region capture can have a different points-to-pixels scale than its display.
+    if (std::abs(contentWidth_ - widthPoints) > 0.5
+        || std::abs(contentHeight_ - heightPoints) > 0.5) {
+        contentWidth_ = widthPoints;
+        contentHeight_ = heightPoints;
+        emit contentSizeChanged();
+    }
+}
+
 void AnimationDriver::setManualZoom(bool zoomed) {
     if (zoomed) {
         zoomUntilMs_ = 1.0e12;
@@ -103,10 +135,28 @@ void AnimationDriver::tick() {
             emit cursorImageChanged();
         }
     }
-    const double localX = sample.x;
-    const double localY = contentHeight_ - sample.y; // AppKit bottom-left -> top-left
-    const double x = std::clamp(localX, 0.0, contentWidth_);
-    const double y = std::clamp(localY, 0.0, contentHeight_);
+    // Pointer position inside the captured rect, in the same pixel space the
+    // compositor draws the pointer in. Before this the driver always mapped through
+    // the primary display's size, so a window or region capture — or anything on a
+    // second display — drew the smooth pointer in the wrong place; only a
+    // full-primary-display recording happened to come out right.
+    double x = 0.0;
+    double y = 0.0;
+    if (sourceBoundsWidth_ > 0.0 && sourceBoundsHeight_ > 0.0
+        && sourcePixelWidth_ > 0.0 && sourcePixelHeight_ > 0.0) {
+        // One shared implementation, because the pointer recorder does the same
+        // conversion: if the two ever disagree the recorded events and the live
+        // preview would put the pointer in different places.
+        const QPointF mapped = Capture::pointerPixelPosition(
+            QPointF(sample.x, sample.y),
+            QRectF(sourceBoundsX_, sourceBoundsY_, sourceBoundsWidth_, sourceBoundsHeight_),
+            QSize(int(sourcePixelWidth_), int(sourcePixelHeight_)),
+            primaryHeightPoints_ > 0.0 ? primaryHeightPoints_ : contentHeight_);
+        x = mapped.x();
+        y = mapped.y();
+    }
+    x = std::clamp(x, 0.0, contentWidth_);
+    y = std::clamp(y, 0.0, contentHeight_);
 
     const bool first = lastX_ < 0.0;
     const bool moved = first || std::abs(x - lastX_) > 0.01 || std::abs(y - lastY_) > 0.01;

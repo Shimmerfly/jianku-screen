@@ -63,6 +63,16 @@ CaptureSource CaptureSource::fromJson(const QJsonObject &object, bool *ok) {
     return source;
 }
 
+QPointF pointerPixelPosition(const QPointF &globalPointAppKit, const QRectF &boundsPoints,
+    const QSize &pixelSize, double primaryHeightPoints) {
+    if (!(boundsPoints.width() > 0.0) || !(boundsPoints.height() > 0.0)
+        || pixelSize.width() <= 0 || pixelSize.height() <= 0)
+        return {};
+    const double quartzY = primaryHeightPoints - globalPointAppKit.y();
+    return QPointF((globalPointAppKit.x() - boundsPoints.x()) * pixelSize.width() / boundsPoints.width(),
+        (quartzY - boundsPoints.y()) * pixelSize.height() / boundsPoints.height());
+}
+
 int evenExtent(double points) {
     if (!(points > 0.0))
         return 2;

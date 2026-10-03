@@ -25,6 +25,12 @@ class MacCapture final : public QObject {
     Q_PROPERTY(QString lastRecordingPath READ lastRecordingPath NOTIFY lastRecordingPathChanged)
     Q_PROPERTY(QString lastProjectPath READ lastProjectPath NOTIFY lastRecordingPathChanged)
     Q_PROPERTY(QObject *frameStore READ frameStore CONSTANT)
+    // The rect being captured and the frame size it arrives at, once a source is
+    // running: {x, y, widthPoints, heightPoints, widthPixels, heightPixels}. The
+    // preview needs it to place the smooth pointer inside the frame — mapping the
+    // pointer through the primary display instead puts it in the wrong place for a
+    // window, a region, or a second screen. Empty until a source starts.
+    Q_PROPERTY(QVariantMap sourceGeometry READ sourceGeometry NOTIFY sourceGeometryChanged)
     Q_PROPERTY(bool screenAuthorized READ screenAuthorized NOTIFY screenAuthorizedChanged)
     Q_PROPERTY(QString permissionIssue READ permissionIssue NOTIFY permissionIssueChanged)
     Q_PROPERTY(QString permissionIssueKind READ permissionIssueKind NOTIFY permissionIssueChanged)
@@ -44,6 +50,7 @@ public:
     QString lastRecordingPath() const { return lastRecordingPath_; }
     QString lastProjectPath() const { return lastProjectPath_; }
     QObject *frameStore() const;
+    QVariantMap sourceGeometry() const { return sourceGeometry_; }
 
     Q_INVOKABLE void refreshDisplays();
     Q_INVOKABLE void startDisplay(int index);
@@ -96,6 +103,7 @@ signals:
     void recordingStatusChanged();
     void lastRecordingPathChanged();
     void screenAuthorizedChanged();
+    void sourceGeometryChanged();
     void permissionIssueChanged();
     void captureAccessDenied();
 
@@ -127,6 +135,7 @@ private:
     QString lastRecordingPath_;
     QString lastProjectPath_;
     QVariantMap recordingSettings_;
+    QVariantMap sourceGeometry_;
     QString permissionIssue_;
     QString permissionIssueKind_;
 

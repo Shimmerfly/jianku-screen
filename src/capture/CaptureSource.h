@@ -65,6 +65,24 @@ CaptureGeometry resolveGeometry(const CaptureSource &source, const QRectF &displ
 // Nearest even integer that is at least 2.
 int evenExtent(double points);
 
+// Global pointer position -> position inside the captured frame, in frame pixels.
+//
+// Two coordinate systems have to be reconciled, and mixing them up puts the pointer
+// in the wrong place only for some sources, which is the kind of bug that survives a
+// full-screen test:
+//   - the pointer arrives from AppKit: origin at the *bottom* left of the primary
+//     display, y increasing upwards;
+//   - a source rect is expressed in Quartz coordinates: origin at the *top* left of
+//     the primary display, y increasing downwards.
+// `primaryHeightPoints` is the primary display's height, which is what converts one
+// into the other — it is not the captured rect's height, and it stays the primary
+// display's even when the source sits on a second screen.
+//
+// The result is not clamped: the caller decides what to do with a pointer that is
+// outside the frame (the smooth pointer still has to travel in from the edge).
+QPointF pointerPixelPosition(const QPointF &globalPointAppKit, const QRectF &boundsPoints,
+    const QSize &pixelSize, double primaryHeightPoints);
+
 // The display whose frame contains the point, or -1 when there are no displays.
 int displayIndexContaining(const QPointF &point, const QList<QRectF> &displayFrames);
 

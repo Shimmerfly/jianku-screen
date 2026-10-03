@@ -63,6 +63,13 @@ public:
     Q_INVOKABLE void stop();
     Q_INVOKABLE void setSettings(const QVariantMap &settings);
     Q_INVOKABLE void setManualZoom(bool zoomed);
+    // Tells the driver what is actually being captured. Without this the pointer is
+    // mapped through the primary display's size whatever the source is, so a window
+    // or region capture — or a second display — puts the smooth pointer in the wrong
+    // place. `boundsPoints` is the recorded rect in global points and `pixelSize`
+    // the frame size, i.e. exactly the pair the pointer recorder uses.
+    Q_INVOKABLE void setSourceGeometry(double x, double y, double widthPoints,
+        double heightPoints, double widthPixels, double heightPixels);
 
 signals:
     void activeChanged();
@@ -82,6 +89,22 @@ private:
 
     double contentWidth_ = 1920.0;
     double contentHeight_ = 1080.0;
+    // The captured rect in global points and the frame size in pixels: the same pair
+    // the pointer recorder uses, so the two cannot disagree about where the pointer
+    // is inside the frame.
+    double sourceBoundsX_ = 0.0;
+    double sourceBoundsY_ = 0.0;
+    double sourceBoundsWidth_ = 0.0;
+    double sourceBoundsHeight_ = 0.0;
+    double sourcePixelWidth_ = 0.0;
+    double sourcePixelHeight_ = 0.0;
+    // Height of the primary display in points. The pointer arrives in AppKit
+    // coordinates (origin bottom-left, y up) while a source rect is expressed in
+    // Quartz coordinates (origin top-left of the primary display, y down), so the
+    // flip needs this one number — and it must be the *primary* display's height
+    // even when the source is on a second screen, because that is where AppKit
+    // anchors its origin.
+    double primaryHeightPoints_ = 0.0;
 
     Animation::EventTrack track_;
     Animation::CursorEngine cursor_;
