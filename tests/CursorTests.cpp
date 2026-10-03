@@ -94,6 +94,20 @@ int main() {
         require(close(engine.clickScaleTargetAt(1800.0), 1.0), "click scale outside lookahead");
         require(close(engine.clickScaleTargetAt(2050.0), 0.8), "click scale before mouse-up");
 
+        // "No click feedback" must actually suppress the fader, not just hide the
+        // switch: the UI exposed clickEffect but nothing read it.
+        {
+            CursorSettings plain = settings;
+            plain.clickScaleEnabled = false;
+            CursorEngine e;
+            e.setTrack(sampleTrack());
+            e.setSettings(plain);
+            require(close(e.clickScaleTargetAt(1900.0), 1.0),
+                "disabled click effect keeps the fader at 1.0 during lookahead");
+            require(close(e.clickScaleTargetAt(2050.0), 1.0),
+                "disabled click effect keeps the fader at 1.0 before mouse-up");
+        }
+
         // Idle hide with restore window.
         {
             EventTrack idle;

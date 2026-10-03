@@ -32,6 +32,9 @@ struct CursorSettings {
     double rotationClampDeg = 20.0;
     double baseRotationDeg = 0.0;
     double clickScale = 0.8;
+    // The reference exposes "no click feedback" as a separate switch; when it is
+    // off the fader must stay at 1.0 instead of still pulsing on every press.
+    bool clickScaleEnabled = true;
     double hiddenScale = 0.8;
     double hideAfterMs = 0.0;
     double hideRestoreMs = 250.0;

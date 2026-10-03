@@ -52,6 +52,8 @@ double CursorEngine::rotationAt(double t) const {
 }
 
 double CursorEngine::clickScaleTargetAt(double t) const {
+    if (!settings_.clickScaleEnabled)
+        return 1.0;
     const InputEvent *next = track_.firstAtOrAfter(t);
     if (!next)
         return 1.0;

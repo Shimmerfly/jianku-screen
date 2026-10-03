@@ -67,11 +67,17 @@ void AnimationDriver::stop() {
 }
 
 void AnimationDriver::setSettings(const QVariantMap &settings) {
-    if (settings.contains("disableMouseMovementSpring"))
-        smoothingEnabled_ = !settings.value("disableMouseMovementSpring").toBool();
     if (settings.contains("mouseMovementSpring"))
         cursorSettings_.movement = springFrom(settings, "mouseMovementSpring", cursorSettings_.movement);
+    // Smoothing stays on unless the explicit "关闭平滑" switch is set or the
+    // preset picker is on "None". Both used to be written to the store and then
+    // ignored, so picking "无" still ran the 470/70/3 spring.
+    const bool explicitOff = settings.value("disableMouseMovementSpring").toBool();
+    const bool presetOff = settings.value("cursorSmoothing").toString() == QStringLiteral("None");
+    smoothingEnabled_ = !explicitOff && !presetOff;
     cursorSettings_.smoothingEnabled = smoothingEnabled_;
+    if (settings.contains("clickEffect"))
+        cursorSettings_.clickScaleEnabled = settings.value("clickEffect").toString() != QStringLiteral("none");
     if (settings.contains("cursorRotateOnXMovementRatio"))
         cursorSettings_.rotationRatio = settings.value("cursorRotateOnXMovementRatio").toDouble();
     if (settings.contains("hideNotMovingCursorAfterMs"))
