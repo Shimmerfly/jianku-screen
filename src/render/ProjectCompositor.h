@@ -189,6 +189,10 @@ struct ComposeResult {
     QString outputPath;
     qint64 sourceFrames = 0;
     qint64 writtenFrames = 0;
+    // Frame count read back out of the finished file. Kept separate from
+    // writtenFrames so a container that silently dropped frames (a stray
+    // -shortest, a truncated mux) is reported instead of passing as success.
+    qint64 encodedFrames = 0;
     int width = 0;
     int height = 0;
     double durationMs = 0.0;

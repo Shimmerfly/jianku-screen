@@ -110,7 +110,8 @@ int main(int argc, char *argv[]) {
     QTextStream(stdout)
         << "输出：" << result.outputPath << '\n'
         << "画布：" << result.width << "×" << result.height << '\n'
-        << "帧数：" << result.writtenFrames << "（源时间轴 " << result.sourceFrames << " 帧）\n"
+        << "帧数：" << result.writtenFrames << "（成片回读 " << result.encodedFrames
+        << "，源时间轴 " << result.sourceFrames << " 帧）\n"
         << "时长：" << QString::number(result.durationMs / 1000.0, 'f', 3) << " 秒\n"
         << "音轨：" << (result.audioMuxed ? "已封装系统声音（直接复制，未重编码）" : "无") << '\n'
         << "耗时：" << QString::number(seconds, 'f', 1) << " 秒（"

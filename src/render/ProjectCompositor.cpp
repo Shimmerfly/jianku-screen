@@ -751,9 +751,13 @@ ComposeResult composeProject(const ComposeOptions &options, const ComposeProgres
                 << QStringLiteral("-crf") << QStringLiteral("18")
                 << QStringLiteral("-pix_fmt") << QStringLiteral("yuv420p")
                 << QStringLiteral("-movflags") << QStringLiteral("+faststart");
-    if (options.includeAudio)
-        encoderArgs << QStringLiteral("-c:a") << QStringLiteral("copy")
-                    << QStringLiteral("-shortest");
+    if (options.includeAudio) {
+        // Audio is copied, never re-encoded. Do NOT add -shortest: the source
+        // audio is a little shorter than the video timeline (audio buffers stop
+        // when the last frame is written), and -shortest would trim the composited
+        // video down to the audio length, silently dropping the last frames.
+        encoderArgs << QStringLiteral("-c:a") << QStringLiteral("copy");
+    }
     encoderArgs << QStringLiteral("-y") << temporaryPath;
 
     encoder.start(options.ffmpegPath, encoderArgs);
@@ -904,6 +908,40 @@ ComposeResult composeProject(const ComposeOptions &options, const ComposeProgres
     }
     if (!result.ok)
         QFile::remove(temporaryPath);
+
+    // The video track is the authority: count the packets that actually landed in
+    // the file so a trimmed or truncated export cannot pass as success. This is
+    // what caught `-shortest` silently dropping the last frames.
+    if (result.ok) {
+        const QFileInfo ffmpegInfo(options.ffmpegPath);
+        QString probePath = options.ffmpegPath;
+        if (ffmpegInfo.isFile()) {
+            // Prefer the ffprobe sitting next to the ffmpeg the caller pointed at.
+            QString sibling = ffmpegInfo.absolutePath() + QStringLiteral("/ffprobe");
+            if (QFileInfo::exists(sibling))
+                probePath = sibling;
+        } else {
+            probePath = QStringLiteral("ffprobe");
+        }
+        QProcess probe;
+        probe.start(probePath, {QStringLiteral("-v"), QStringLiteral("error"),
+            QStringLiteral("-select_streams"), QStringLiteral("v:0"),
+            QStringLiteral("-count_packets"),
+            QStringLiteral("-show_entries"), QStringLiteral("stream=nb_read_packets"),
+            QStringLiteral("-of"), QStringLiteral("csv=p=0"), result.outputPath});
+        if (probe.waitForFinished(60000) && probe.exitCode() == 0) {
+            bool ok = false;
+            const qint64 counted = QString::fromUtf8(probe.readAllStandardOutput())
+                .trimmed().toLongLong(&ok);
+            if (ok && counted > 0)
+                result.encodedFrames = counted;
+        }
+        if (result.encodedFrames > 0 && result.encodedFrames != result.writtenFrames) {
+            result.error = QStringLiteral("输出帧数与合成帧数不一致（合成 %1，成片 %2）")
+                .arg(result.writtenFrames).arg(result.encodedFrames);
+            result.ok = false;
+        }
+    }
     return result;
 }
 
