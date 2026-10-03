@@ -27,6 +27,8 @@ qt_add_executable(jianku-screen MACOSX_BUNDLE
     src/animation/AnimationSettings.cpp
     src/animation/AnimationSettings.h
     src/project/ProjectTimeline.cpp
+    src/project/RecentProjects.cpp
+    src/project/RecentProjects.h
     src/project/EditTimeline.cpp
     src/project/EditTimeline.h
     src/render/ProjectCompositor.cpp

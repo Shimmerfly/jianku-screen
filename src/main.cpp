@@ -3,6 +3,7 @@
 #include "mac/QuickScreenshot.h"
 #include "mac/GlobalHotkey.h"
 #include "mac/MacWindowStyle.h"
+#include "project/RecentProjects.h"
 #include "render/CanvasPreview.h"
 #include "render/ExportController.h"
 #include "render/TimelineController.h"
@@ -76,9 +77,19 @@ int main(int argc, char *argv[]) {
     QObject::connect(&timeline, &Render::TimelineController::timelineChanged, &exporter, [&] {
         exporter.setTimeline(timeline.timeline());
     });
-    exporter.setProjectDirectory(capture.lastProjectPath());
-    timeline.load(capture.lastProjectPath());
-    exporter.setTimeline(timeline.timeline());
+    // The scan needs the recording directory, which lives in the settings — the
+    // recorder's own copy of them is only filled in when a recording starts, so a
+    // fresh launch would otherwise search the default directory even after the user
+    // changed it.
+    auto refreshRecent = [&] {
+        capture.setRecordingSettings(settings.current());
+        capture.refreshRecentProjects();
+    };
+    QObject::connect(&settings, &SettingsStore::currentChanged, &capture, refreshRecent);
+    refreshRecent();
+    if (capture.lastProjectPath().isEmpty())
+        capture.openProject(RecentProjects::mostRecent(RecentProjects::recordingDirectory(
+            settings.current().value("recordingDirectory").toString())));
     engine.loadFromModule("Jianku.Screen", "Main");
     if (engine.rootObjects().isEmpty())
         return 1;

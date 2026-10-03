@@ -4,6 +4,7 @@
 #import "../capture/MediaClock.h"
 #import "../capture/VideoFrameStore.h"
 #include "../project/ProjectTimeline.h"
+#include "../project/RecentProjects.h"
 
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreMedia/CoreMedia.h>
@@ -1261,6 +1262,7 @@ void MacCapture::startRecording() {
             owner->setRecording(false);
             if (problem.isEmpty()) {
                 owner->setLastRecordingPath(output);
+                owner->refreshRecentProjects();
                 owner->setRecordingStatus(QStringLiteral("正在生成鼠标时间轴与自动缩放区间…"));
                 const QString directory = owner->impl_->projectDirectory;
                 auto processingGate = owner->impl_->gate;
@@ -1348,6 +1350,32 @@ void MacCapture::resumeRecording() {
 
 void MacCapture::openLastProject() {
     if (!lastProjectPath_.isEmpty()) QDesktopServices::openUrl(QUrl::fromLocalFile(lastProjectPath_));
+}
+
+void MacCapture::refreshRecentProjects() {
+    const QString directory = RecentProjects::recordingDirectory(
+        recordingSettings_.value(QStringLiteral("recordingDirectory")).toString());
+    const QStringList found = RecentProjects::list(directory);
+    QVariantList list;
+    for (const QString &path : found) {
+        list.append(QVariantMap{{QStringLiteral("path"), path},
+            {QStringLiteral("label"), RecentProjects::describe(path)}});
+    }
+    // Always announce, even when the list is unchanged: a caller that just finished a
+    // recording uses this signal to know the scan is done.
+    recentProjects_ = list;
+    emit recentProjectsChanged();
+}
+
+void MacCapture::openProject(const QString &directory) {
+    if (directory.isEmpty() || !QFileInfo::exists(directory + QStringLiteral("/project.json"))) {
+        reportError(QStringLiteral("找不到这个录制工程"));
+        return;
+    }
+    // The same signal a finished recording emits, so the exporter and the timeline
+    // pick it up through the path they already listen to.
+    lastProjectPath_ = directory;
+    emit lastRecordingPathChanged();
 }
 
 void MacCapture::openRecordingDirectory() {

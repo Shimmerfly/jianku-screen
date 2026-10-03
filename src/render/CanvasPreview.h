@@ -28,8 +28,16 @@ class CanvasPreview final : public QObject {
     Q_PROPERTY(QRectF contentRect READ contentRect NOTIFY changed)
     Q_PROPERTY(double radiusRatio READ radiusRatio NOTIFY changed)
     Q_PROPERTY(double insetRatio READ insetRatio NOTIFY changed)
-    // Canvas aspect ratio (width / height) for the requested output ratio.
-    Q_PROPERTY(double aspect READ aspect NOTIFY changed)
+    // Canvas aspect ratio (width / height) for the requested output ratio. This is the
+    // property the preview sizes its stage with, so it has to be right even before a
+    // capture source exists: it falls back to the source's own ratio and only then to
+    // 16:9. A stub returning 1.0 drew the preview as a square and made every aspect
+    // ratio setting look broken.
+    Q_PROPERTY(double planAspect READ planAspect NOTIFY changed)
+    // The canvas the layout was computed in. Exposed for tests and for the preview to
+    // reason about absolute sizes (radius, inset) that do not scale with the stage.
+    Q_PROPERTY(double planWidth READ planWidth NOTIFY changed)
+    Q_PROPERTY(double planHeight READ planHeight NOTIFY changed)
     // Style, passed through for the QML that draws the background itself.
     Q_PROPERTY(QString backgroundType READ backgroundType NOTIFY changed)
     Q_PROPERTY(QColor backgroundColor READ backgroundColor NOTIFY changed)
@@ -53,7 +61,9 @@ public:
     QRectF contentRect() const { return fraction(plan_.layout.contentRect); }
     double radiusRatio() const;
     double insetRatio() const;
-    double aspect() const;
+    double planAspect() const;
+    double planWidth() const { return plan_.valid ? plan_.width() : 0.0; }
+    double planHeight() const { return plan_.valid ? plan_.height() : 0.0; }
     QString backgroundType() const { return style_.backgroundType; }
     QColor backgroundColor() const { return style_.backgroundColor; }
     QColor gradientStart() const { return style_.gradientStart; }
@@ -67,7 +77,15 @@ public:
     // Settings map plus the captured source size. Both come from QML: the settings
     // are the live current values, the source size from the driver (or the chosen
     // display before capture starts).
-    Q_INVOKABLE void update(const QVariantMap &settings, double sourceWidth, double sourceHeight);
+    // `sourceWidth`/`sourceHeight` are the captured rect in *points*; `pixelWidth`/
+    // `pixelHeight` are the same frame in pixels. Both are needed and they are not
+    // interchangeable: the layout is computed in pixels because the appearance
+    // settings are authored in output pixels (an 8 px corner radius is 8 px of the
+    // exported file), while the pointer overlay is positioned in points. Planning the
+    // preview from points made every absolute value twice its real size on a Retina
+    // display — the corner radius in the preview was exactly 2x the exported one.
+    Q_INVOKABLE void update(const QVariantMap &settings, double sourceWidth, double sourceHeight,
+        double pixelWidth = 0.0, double pixelHeight = 0.0);
     Q_INVOKABLE QString backgroundUrl(const QString &name) const;
 
 signals:
@@ -75,9 +93,13 @@ signals:
 
 private:
     QRectF fraction(const QRectF &rect) const;
-    // Keeps the last source size so a settings-only update can re-plan.
+    // Keeps the last source size so a settings-only update can re-plan. The plan is
+    // always built from the pixel size; the point size is the fallback for callers
+    // that only know one of the two.
     double sourceWidth_ = 1920.0;
     double sourceHeight_ = 1080.0;
+    double pixelWidth_ = 1920.0;
+    double pixelHeight_ = 1080.0;
     QString backgroundRoot_;
     CanvasStyle style_;
     CanvasPlan plan_;

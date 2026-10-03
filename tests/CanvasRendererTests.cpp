@@ -248,6 +248,58 @@ int main(int argc, char **argv) {
                 "a missing built-in background resolves to nothing instead of a stale path");
         }
 
+        // --- aspect ratio is a ratio, not an integer -----------------------------
+        // CanvasPlan::width()/height() return int, so `width() / height()` on a
+        // 1680x944 canvas is 1. That integer division reached the preview through a
+        // Q_PROPERTY and drew every recording as a square whatever output ratio was
+        // selected.
+        {
+            const CanvasPlan plan = planCanvas(canvasStyleFromMap({}), QSizeF(1680.0, 944.0),
+                QSizeF(1680.0, 944.0));
+            require(plan.aspect() > 1.77 && plan.aspect() < 1.79,
+                "a 1680x944 canvas reports a 16:9 ratio, not 1");
+            require(plan.width() / plan.height() == 1,
+                "and the int accessors still truncate, which is why aspect() exists");
+        }
+
+        // --- the preview and the export agree on absolute sizes ------------------
+        // Appearance values are authored in *output pixels*: an 8 px corner radius is
+        // 8 px of the exported file. The preview used to plan itself from the source
+        // in points, so on a Retina display every absolute value came out at twice
+        // its exported size — the corner radius the user could see was 2x the one
+        // that ended up in the file.
+        {
+            QVariantMap settings;
+            settings.insert(QStringLiteral("windowBorderRadius"), 8.0);
+            settings.insert(QStringLiteral("backgroundPaddingRatio"), 4.5);
+            const CanvasStyle style = canvasStyleFromMap(settings);
+
+            const QSizeF points(1680.0, 1050.0);
+            const QSizeF pixels(3360.0, 2100.0);
+
+            // What the export does: plan in pixels.
+            const CanvasPlan exported = planCanvas(style,
+                canvasSizeForAspect(pixels, QStringLiteral("16:9")), pixels);
+            // What the preview must now do: also plan in pixels, then map to its stage.
+            const CanvasPlan previewed = planCanvas(style,
+                canvasSizeForAspect(pixels, QStringLiteral("16:9")), pixels);
+            require(std::abs(exported.aspect() - previewed.aspect()) < 1e-9,
+                "the preview plans the same canvas as the export");
+
+            const double exportedRatio = style.radius / exported.layout.frameRect.height();
+            const double previewedRatio = style.radius / previewed.layout.frameRect.height();
+            require(std::abs(exportedRatio - previewedRatio) < 1e-9,
+                "so the corner radius is the same fraction of the frame in both");
+
+            // Planning the same settings from the point size is what was wrong, and
+            // the size of the error is what the user reported: a factor of two.
+            const CanvasPlan stale = planCanvas(style,
+                canvasSizeForAspect(points, QStringLiteral("16:9")), points);
+            const double staleRatio = style.radius / stale.layout.frameRect.height();
+            require(staleRatio / exportedRatio > 1.9 && staleRatio / exportedRatio < 2.1,
+                "planning from points instead of pixels doubles the radius ratio");
+        }
+
         std::cout << "canvas renderer checks passed\n";
         return 0;
     } catch (const std::exception &error) {

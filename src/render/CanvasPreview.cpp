@@ -29,7 +29,9 @@ QRectF CanvasPreview::fraction(const QRectF &rect) const {
 double CanvasPreview::radiusRatio() const {
     if (!plan_.valid || plan_.height() <= 0)
         return 0.0;
-    // Corners are drawn on the stage, so the radius has to scale with it too.
+    // Fraction of the canvas height, so the preview's stage shows the same corner
+    // curvature as the exported file. The plan is in pixels and the stage is in
+    // points, and the ratio is what bridges them.
     return style_.radius / plan_.height();
 }
 
@@ -39,10 +41,12 @@ double CanvasPreview::insetRatio() const {
     return style_.insetSize / plan_.height();
 }
 
-double CanvasPreview::aspect() const {
-    if (plan_.valid && plan_.height() > 0)
-        return plan_.width() / plan_.height();
-    return sourceHeight_ > 0 ? sourceWidth_ / sourceHeight_ : 16.0 / 9.0;
+double CanvasPreview::planAspect() const {
+    // Read from the plan, not from `valid`: an invalid plan still has a size, and the
+    // preview must keep drawing at the right shape while it waits for a source.
+    if (plan_.aspect() > 0.0)
+        return plan_.aspect();
+    return pixelHeight_ > 0.0 ? pixelWidth_ / pixelHeight_ : 16.0 / 9.0;
 }
 
 double CanvasPreview::backgroundBlur() const {
@@ -61,19 +65,27 @@ QString CanvasPreview::backgroundUrl(const QString &name) const {
     return {};
 }
 
-void CanvasPreview::update(const QVariantMap &settings, double sourceWidth, double sourceHeight) {
+void CanvasPreview::update(const QVariantMap &settings, double sourceWidth, double sourceHeight,
+    double pixelWidth, double pixelHeight) {
     if (sourceWidth > 0.0)
         sourceWidth_ = sourceWidth;
     if (sourceHeight > 0.0)
         sourceHeight_ = sourceHeight;
+    // Until a pixel size is known, assume the points are the pixels. That is right for
+    // a 1x display and is only a fallback: every real capture path passes both.
+    pixelWidth_ = pixelWidth > 0.0 ? pixelWidth : sourceWidth_;
+    pixelHeight_ = pixelHeight > 0.0 ? pixelHeight : sourceHeight_;
     style_ = canvasStyleFromMap(settings, backgroundRoot_);
 
     // Aspect ratio: the export picks its canvas from the source and the requested
-    // ratio, and the preview has to show that same canvas.
-    const QSizeF canvas = canvasSizeForAspect(QSizeF(sourceWidth_, sourceHeight_),
+    // ratio, and the preview has to show that same canvas. Built in *pixels* so the
+    // absolute values in the style (radius, inset, shadow distance) mean the same
+    // thing here as in the exported file; the preview scales the resulting fractions
+    // down onto its own stage.
+    const QSizeF canvas = canvasSizeForAspect(QSizeF(pixelWidth_, pixelHeight_),
         settings.value(QStringLiteral("outputAspectRatio"),
             QStringLiteral("auto")).toString());
-    plan_ = planCanvas(style_, canvas, QSizeF(sourceWidth_, sourceHeight_));
+    plan_ = planCanvas(style_, canvas, QSizeF(pixelWidth_, pixelHeight_));
     emit changed();
 }
 

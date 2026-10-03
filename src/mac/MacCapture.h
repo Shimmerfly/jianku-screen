@@ -28,6 +28,10 @@ class MacCapture final : public QObject {
     Q_PROPERTY(QString recordingStatus READ recordingStatus NOTIFY recordingStatusChanged)
     Q_PROPERTY(QString lastRecordingPath READ lastRecordingPath NOTIFY lastRecordingPathChanged)
     Q_PROPERTY(QString lastProjectPath READ lastProjectPath NOTIFY lastRecordingPathChanged)
+    // Recordings found on disk, newest first, as {path, label}. Without this the app
+    // only knows about the project it just recorded, so restarting it leaves the
+    // export and the edit timeline disabled with no way to reach an older recording.
+    Q_PROPERTY(QVariantList recentProjects READ recentProjects NOTIFY recentProjectsChanged)
     Q_PROPERTY(QObject *frameStore READ frameStore CONSTANT)
     // The rect being captured and the frame size it arrives at, once a source is
     // running: {x, y, widthPoints, heightPoints, widthPixels, heightPixels}. The
@@ -56,6 +60,7 @@ public:
     QString lastProjectPath() const { return lastProjectPath_; }
     QObject *frameStore() const;
     QVariantMap sourceGeometry() const { return sourceGeometry_; }
+    QVariantList recentProjects() const { return recentProjects_; }
 
     Q_INVOKABLE void refreshDisplays();
     Q_INVOKABLE void startDisplay(int index);
@@ -77,6 +82,17 @@ public:
     Q_INVOKABLE void stopRecording();
     Q_INVOKABLE void stop();
     Q_INVOKABLE void openLastProject();
+    // Re-scans the recording directory. Called on launch and after a recording ends.
+    Q_INVOKABLE void refreshRecentProjects();
+    // The settings the scan needs (only the recording directory, currently). Kept
+    // separate from the recording settings so the scan does not depend on a recording
+    // having happened.
+    Q_INVOKABLE void setRecordingSettings(const QVariantMap &settings) {
+        recordingSettings_ = settings;
+    }
+    // Points the app at an existing recording: the exporter and the edit timeline
+    // both follow `lastProjectPathChanged`.
+    Q_INVOKABLE void openProject(const QString &directory);
     Q_INVOKABLE void openRecordingDirectory();
 
     bool screenAuthorized() const;
@@ -109,6 +125,7 @@ signals:
     void lastRecordingPathChanged();
     void screenAuthorizedChanged();
     void sourceGeometryChanged();
+    void recentProjectsChanged();
     void permissionIssueChanged();
     void captureAccessDenied();
 
@@ -142,6 +159,7 @@ private:
     QString lastProjectPath_;
     QVariantMap recordingSettings_;
     QVariantMap sourceGeometry_;
+    QVariantList recentProjects_;
     QString permissionIssue_;
     QString permissionIssueKind_;
 

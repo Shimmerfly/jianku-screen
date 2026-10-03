@@ -20,6 +20,12 @@ class AnimationDriver : public QObject {
     Q_PROPERTY(bool active READ active NOTIFY activeChanged)
     Q_PROPERTY(double contentWidth READ contentWidth NOTIFY contentSizeChanged)
     Q_PROPERTY(double contentHeight READ contentHeight NOTIFY contentSizeChanged)
+    // The same frame in pixels. Needed because the appearance settings are authored in
+    // output pixels while the pointer works in points: on a Retina display the two
+    // differ by the backing scale factor, and using points for the layout drew every
+    // absolute value at twice its exported size.
+    Q_PROPERTY(double sourcePixelWidth READ sourcePixelWidth NOTIFY contentSizeChanged)
+    Q_PROPERTY(double sourcePixelHeight READ sourcePixelHeight NOTIFY contentSizeChanged)
     Q_PROPERTY(double cursorX READ cursorX NOTIFY poseChanged)
     Q_PROPERTY(double cursorY READ cursorY NOTIFY poseChanged)
     Q_PROPERTY(double cursorRotation READ cursorRotation NOTIFY poseChanged)
@@ -42,6 +48,14 @@ public:
     bool active() const { return active_; }
     double contentWidth() const { return contentWidth_; }
     double contentHeight() const { return contentHeight_; }
+    // Falls back to the point size: before a capture starts there is no pixel size, and
+    // a 1x fallback is the honest guess rather than an arbitrary scale factor.
+    double sourcePixelWidth() const {
+        return sourcePixelWidth_ > 0.0 ? sourcePixelWidth_ : contentWidth_;
+    }
+    double sourcePixelHeight() const {
+        return sourcePixelHeight_ > 0.0 ? sourcePixelHeight_ : contentHeight_;
+    }
     double cursorX() const { return cursorX_; }
     double cursorY() const { return cursorY_; }
     double cursorRotation() const { return cursorRotation_; }

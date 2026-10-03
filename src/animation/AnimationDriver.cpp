@@ -95,12 +95,18 @@ void AnimationDriver::setSourceGeometry(double x, double y, double widthPoints,
     // The preview draws in source *points* (the frame is scaled to fit anyway), so
     // the content box is the recorded rect's size. The pixel size is kept because a
     // region capture can have a different points-to-pixels scale than its display.
-    if (std::abs(contentWidth_ - widthPoints) > 0.5
-        || std::abs(contentHeight_ - heightPoints) > 0.5) {
-        contentWidth_ = widthPoints;
-        contentHeight_ = heightPoints;
+    // Emitted whenever either size changes, because both are read through the same
+    // `contentSizeChanged` signal: the pixel size is a second view of one thing.
+    const bool pointsChanged = std::abs(contentWidth_ - widthPoints) > 0.5
+        || std::abs(contentHeight_ - heightPoints) > 0.5;
+    const bool pixelsChanged = std::abs(sourcePixelWidth_ - widthPixels) > 0.5
+        || std::abs(sourcePixelHeight_ - heightPixels) > 0.5;
+    contentWidth_ = widthPoints;
+    contentHeight_ = heightPoints;
+    sourcePixelWidth_ = widthPixels;
+    sourcePixelHeight_ = heightPixels;
+    if (pointsChanged || pixelsChanged)
         emit contentSizeChanged();
-    }
 }
 
 void AnimationDriver::setManualZoom(bool zoomed) {

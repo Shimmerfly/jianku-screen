@@ -108,7 +108,11 @@ ApplicationWindow {
     // The canvas layout is computed once, in C++, and shared with the export and
     // the screenshot. QML only maps the resulting fractions onto its stage.
     function refreshCanvas() {
-        canvasPreview.update(settings.current, anim.contentWidth, anim.contentHeight)
+        // Points for the pointer overlay, pixels for the layout. They differ on a
+        // Retina display, and using the point size for both made every absolute
+        // appearance value (corner radius, inset) twice its exported size.
+        canvasPreview.update(settings.current, anim.contentWidth, anim.contentHeight,
+            anim.sourcePixelWidth, anim.sourcePixelHeight)
     }
 
     Component.onCompleted: {

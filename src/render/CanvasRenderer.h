@@ -65,6 +65,12 @@ struct CanvasPlan {
 
     int width() const { return static_cast<int>(canvasSize.width()); }
     int height() const { return static_cast<int>(canvasSize.height()); }
+    // Double-precision ratio, deliberately not `width() / height()`: those return int,
+    // and a 1680x944 canvas divided that way is 1, which is how the preview came to
+    // draw itself as a square whatever aspect ratio was selected.
+    double aspect() const {
+        return canvasSize.height() > 0.0 ? canvasSize.width() / canvasSize.height() : 0.0;
+    }
 };
 
 // `canvasSize` empty means "grow the canvas from the content" (quick screenshot);

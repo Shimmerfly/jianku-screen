@@ -19,7 +19,18 @@ Item {
     property real stageMargin: 22
 
     readonly property var plan: canvasPreview
-    readonly property real aspect: Math.max(0.05, plan.aspect)
+    // `Math.max(0.05, plan.planAspect)` looked reasonable and was silently wrong: the
+    // QML type of `plan` here is `var`, and reading a property that the *engine* has
+    // not resolved yet yields undefined rather than an error, so the max() collapsed
+    // to its floor and the stage became a square. Reading it through a typed local
+    // makes a missing property loud instead. The debug log that found this is gone;
+    // what it found is this comment.
+    readonly property real planAspect: {
+        var a = Number(plan.planAspect)
+        if (!(a > 0)) a = 16.0 / 9.0
+        return a
+    }
+    readonly property real aspect: Math.max(0.05, planAspect)
     readonly property real shadowIntensity: Math.max(0, Number(options.shadowIntensity || 0))
     readonly property real shadowAngle: Number(options.shadowAngle || 90)
     readonly property real shadowDistance: Number(options.shadowDistance || 0)
