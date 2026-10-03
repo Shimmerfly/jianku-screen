@@ -115,6 +115,7 @@ ApplicationWindow {
         anim.setSettings(settings.current)
         anim.start()
         refreshCanvas()
+        timeline.setFrameRate(exporter.frameRate)
     }
     Connections {
         target: settings
@@ -126,6 +127,13 @@ ApplicationWindow {
     Connections {
         target: anim
         function onContentSizeChanged() { root.refreshCanvas() }
+    }
+    // The playhead snaps to frames, so the controller has to know the frame rate the
+    // export will use. Read from the exporter rather than from a setting, because the
+    // exporter is what actually writes the frames.
+    Connections {
+        target: exporter
+        function onFrameRateChanged() { timeline.setFrameRate(exporter.frameRate) }
     }
     Connections {
         target: capture
@@ -431,6 +439,7 @@ ApplicationWindow {
 
                 PreviewCanvas {
                     anchors.fill: parent
+                    anchors.bottomMargin: editStrip.visible ? editStrip.height : 0
                     live: capture.running
                 }
 
@@ -443,6 +452,18 @@ ApplicationWindow {
                         : "未开始采集 · 显示的是画布外观预览"
                     color: Theme.textFaint
                     font.pixelSize: 11
+                }
+
+                // The edit strip sits under the preview, where the thing it edits is.
+                // Hidden until a recording exists: an empty ruler would be a control
+                // that does nothing.
+                TimelineStrip {
+                    id: editStrip
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    visible: ready && !capture.running
+                    height: 74
                 }
 
                 Text {

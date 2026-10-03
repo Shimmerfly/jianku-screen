@@ -1,6 +1,7 @@
 #include "ExportController.h"
 
 #include <QCoreApplication>
+#include <algorithm>
 #include <QDir>
 #include <QFileInfo>
 #include <QMetaObject>
@@ -79,6 +80,7 @@ bool ExportController::start(const QString &outputPath, bool includeCursor,
     options.includeAutoZoom = includeAutoZoom;
     options.includeAudio = includeAudio;
     options.includeMicrophone = includeMicrophone;
+    options.fps = frameRate_;
     // The strength factor is fps / 60 relative to the reference's 60 fps, so it
     // follows the export frame rate. Everything else stays as the project saved it.
     options.motionBlur.fps = options.fps;
@@ -163,6 +165,16 @@ void ExportController::revealOutput() const {
         return;
     QProcess::startDetached(QStringLiteral("/usr/bin/open"),
         {QStringLiteral("-R"), outputPath_});
+}
+
+void ExportController::setFrameRate(int fps) {
+    // Clamped to what the compositor accepts, so a bad value from a settings file
+    // cannot reach the encoder.
+    const int clamped = std::clamp(fps, 1, 240);
+    if (clamped == frameRate_)
+        return;
+    frameRate_ = clamped;
+    emit frameRateChanged();
 }
 
 void ExportController::reset() {

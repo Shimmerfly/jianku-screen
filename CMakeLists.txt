@@ -40,6 +40,8 @@ qt_add_executable(jianku-screen MACOSX_BUNDLE
     src/render/CanvasPreview.h
     src/render/TimelineController.cpp
     src/render/TimelineController.h
+    src/render/TimelineGeometry.cpp
+    src/render/TimelineGeometry.h
     src/render/ExportController.cpp
     src/render/ExportController.h
     src/animation/AnimationSettings.cpp
@@ -123,6 +125,52 @@ if(BUILD_TESTING)
     target_link_libraries(edit-timeline-tests PRIVATE Qt6::Core)
     add_test(NAME edit-timeline COMMAND edit-timeline-tests)
 
+    # QML-side check: instantiating the real strip against a real controller is the
+    # only way to catch a binding that silently renders nothing. It needs the built
+    # QML module, so it depends on the app target's module directory.
+    # The app compiles its QML into its own resources, so a separate test process
+    # cannot import that module (its qmldir prefers a resource path that only exists
+    # inside the app binary). The test therefore builds its own module from the same
+    # source files — same QML, no duplication of content.
+    # The aliases have to be set before the module is declared, or the resources
+    # land under `ui/…` while the generated qmldir points at the bare names and
+    # every type fails to resolve. The app block below sets the same properties.
+    qt_add_executable(timeline-strip-tests tests/TimelineStripTests.cpp)
+    set_source_files_properties(ui/TimelineStrip.qml PROPERTIES QT_RESOURCE_ALIAS TimelineStrip.qml)
+    set_source_files_properties(ui/UiButton.qml PROPERTIES QT_RESOURCE_ALIAS UiButton.qml)
+    set_source_files_properties(ui/Theme.qml PROPERTIES
+        QT_RESOURCE_ALIAS Theme.qml QT_QML_SINGLETON_TYPE TRUE)
+    # A distinct output directory: two modules cannot share one, and sharing the app
+    # module would mean sharing its qmldir, which points into the app's resources.
+    qt_add_qml_module(timeline-strip-tests
+        URI Jianku.Screen
+        VERSION 1.0
+        NO_PLUGIN
+        OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/qml-test-module/Jianku/Screen"
+        QML_FILES
+            ui/Theme.qml
+            ui/TimelineStrip.qml
+            ui/UiButton.qml
+    )
+
+    target_sources(timeline-strip-tests PRIVATE
+        src/render/TimelineController.cpp src/render/TimelineGeometry.cpp
+        src/render/ProjectCompositor.cpp src/project/EditTimeline.cpp
+        src/render/CanvasLayout.cpp src/render/CanvasRenderer.cpp
+        src/render/MotionBlur.cpp src/animation/AnimationSettings.cpp
+        src/animation/AutoFocusEngine.cpp src/animation/AutomaticZoom.cpp
+        src/animation/CursorEngine.cpp src/animation/SpringSolver.cpp)
+    target_link_libraries(timeline-strip-tests PRIVATE
+        Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
+    target_compile_definitions(timeline-strip-tests PRIVATE
+        JIANKU_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME timeline-strip COMMAND timeline-strip-tests)
+
+    add_executable(timeline-geometry-tests tests/TimelineGeometryTests.cpp
+        src/render/TimelineGeometry.cpp)
+    target_link_libraries(timeline-geometry-tests PRIVATE Qt6::Core)
+    add_test(NAME timeline-geometry COMMAND timeline-geometry-tests)
+
     add_executable(motion-blur-tests tests/MotionBlurTests.cpp src/render/MotionBlur.cpp)
     target_link_libraries(motion-blur-tests PRIVATE Qt6::Core Qt6::Gui)
     add_test(NAME motion-blur COMMAND motion-blur-tests)
@@ -141,7 +189,7 @@ if(BUILD_TESTING)
     add_test(NAME compositor COMMAND compositor-tests)
 
     add_executable(timeline-controller-tests tests/TimelineControllerTests.cpp
-        src/render/TimelineController.cpp src/render/ProjectCompositor.cpp
+        src/render/TimelineController.cpp src/render/TimelineGeometry.cpp src/render/ProjectCompositor.cpp
         src/project/EditTimeline.cpp src/render/CanvasLayout.cpp
         src/render/CanvasRenderer.cpp src/render/MotionBlur.cpp
         src/animation/AnimationSettings.cpp src/animation/AutoFocusEngine.cpp
@@ -206,6 +254,7 @@ set_source_files_properties(ui/IconRail.qml PROPERTIES QT_RESOURCE_ALIAS IconRai
 set_source_files_properties(ui/PreviewCanvas.qml PROPERTIES QT_RESOURCE_ALIAS PreviewCanvas.qml)
 set_source_files_properties(ui/PanelCard.qml PROPERTIES QT_RESOURCE_ALIAS PanelCard.qml)
 set_source_files_properties(ui/RegionSelector.qml PROPERTIES QT_RESOURCE_ALIAS RegionSelector.qml)
+set_source_files_properties(ui/TimelineStrip.qml PROPERTIES QT_RESOURCE_ALIAS TimelineStrip.qml)
 set_source_files_properties(ui/PermissionGuide.qml PROPERTIES QT_RESOURCE_ALIAS PermissionGuide.qml)
 set_source_files_properties(ui/UiButton.qml PROPERTIES QT_RESOURCE_ALIAS UiButton.qml)
 set_source_files_properties(ui/UiField.qml PROPERTIES QT_RESOURCE_ALIAS UiField.qml)
@@ -227,6 +276,7 @@ qt_add_qml_module(jianku-screen
         ui/PreviewCanvas.qml
         ui/PanelCard.qml
         ui/RegionSelector.qml
+        ui/TimelineStrip.qml
         ui/PermissionGuide.qml
         ui/UiButton.qml
         ui/UiField.qml

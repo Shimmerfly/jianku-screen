@@ -27,6 +27,10 @@ class ExportController final : public QObject {
     Q_PROPERTY(QString outputPath READ outputPath NOTIFY outputPathChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
     Q_PROPERTY(QString defaultOutputPath READ defaultOutputPath NOTIFY defaultOutputPathChanged)
+    // Output frame rate. The UI reads it so the timeline's playhead snaps to the
+    // same frames the export writes; keeping one source avoids the two disagreeing
+    // about where a frame boundary is.
+    Q_PROPERTY(int frameRate READ frameRate WRITE setFrameRate NOTIFY frameRateChanged)
 
 public:
     explicit ExportController(QObject *parent = nullptr);
@@ -40,6 +44,9 @@ public:
     // <project>/composed.mp4 for the most recent recording, so the UI can show
     // where the result will land before the user starts an export.
     QString defaultOutputPath() const { return defaultOutputPath_; }
+
+    int frameRate() const { return frameRate_; }
+    void setFrameRate(int fps);
 
     // Records the project the UI is looking at. Called whenever a recording
     // finishes; an empty path disables exporting.
@@ -66,6 +73,7 @@ signals:
     void outputPathChanged();
     void errorChanged();
     void defaultOutputPathChanged();
+    void frameRateChanged();
     // Emitted once per finished export; `ok` mirrors the error being empty.
     void finished(bool ok);
 
@@ -74,6 +82,7 @@ private:
 
     QString projectDirectory_;
     Project::EditTimeline timeline_;
+    int frameRate_ = 60;
     QString defaultOutputPath_;
     QString outputPath_;
     QString status_;

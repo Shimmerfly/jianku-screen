@@ -225,6 +225,105 @@ int main(int argc, char **argv) {
                 "and the first segment still ends where the cut begins");
         }
 
+        // --- playhead and ruler ----------------------------------------------
+        {
+            TimelineController controller;
+            require(controller.load(project), "loaded");
+            require(close(controller.playheadMs(), 0.0), "the playhead starts at the beginning");
+            require(close(controller.playheadRatio(), 0.0), "at ratio 0");
+
+            require(controller.rulerTicks().size() >= 2, "the ruler has ticks");
+            const QVariantMap first = controller.rulerTicks().front().toMap();
+            const QVariantMap last = controller.rulerTicks().back().toMap();
+            require(close(first.value(QStringLiteral("ratio")).toDouble(), 0.0),
+                "the first tick is at the start");
+            require(close(last.value(QStringLiteral("ratio")).toDouble(), 1.0),
+                "the last tick is at the end");
+            require(!first.value(QStringLiteral("label")).toString().isEmpty(),
+                "ticks carry labels");
+
+            // --- moving the playhead -----------------------------------------
+            controller.setPlayheadRatio(0.25);
+            require(close(controller.playheadMs(), 2500.0), "a quarter of ten seconds");
+            controller.setPlayheadMs(999999.0);
+            require(close(controller.playheadMs(), 10000.0),
+                "a time past the end clamps to the end");
+            controller.setPlayheadMs(-500.0);
+            require(close(controller.playheadMs(), 0.0), "and one before the start clamps to 0");
+            controller.setPlayheadRatio(2.0);
+            require(close(controller.playheadMs(), 10000.0), "a ratio above 1 clamps too");
+
+            // --- frame snapping ----------------------------------------------
+            // Without a frame rate there is nothing to snap to, and guessing one
+            // would silently move the user's playhead.
+            controller.setPlayheadMs(1234.0);
+            require(close(controller.snappedPlayheadMs(), 1234.0),
+                "with no frame rate the playhead is used as it stands");
+            controller.setFrameRate(60.0);
+            require(close(controller.snappedPlayheadMs(), 1233.3333333333, 1e-6),
+                "at 60 fps it snaps to the nearest frame");
+            // Snapping at the very end must not push past the last frame, where a
+            // split would be refused for no visible reason.
+            controller.setPlayheadMs(10000.0);
+            require(controller.snappedPlayheadMs() <= 10000.0 + 1e-9,
+                "snapping at the end stays inside the timeline");
+            controller.setFrameRate(0.0);
+            require(close(controller.snappedPlayheadMs(), 10000.0), "an unknown rate disables snapping");
+
+            // --- the playhead survives an edit --------------------------------
+            controller.setPlayheadMs(8000.0);
+            require(controller.removeRange(1000.0, 4000.0), "cut three seconds out");
+            require(close(controller.outputDurationMs(), 7000.0), "leaving seven seconds");
+            require(controller.playheadMs() <= 7000.0 + 1e-9,
+                "the playhead is pulled back inside the shorter timeline");
+            require(controller.rulerTicks().size() >= 2, "the ruler still has ticks");
+            require(close(controller.rulerTicks().back().toMap()
+                    .value(QStringLiteral("ratio")).toDouble(), 1.0),
+                "and still ends at the end");
+
+            // Undo restores the length; the playhead stays where it was clamped,
+            // which is the least surprising thing for a single-step undo.
+            controller.undo();
+            require(close(controller.outputDurationMs(), 10000.0), "undo restores the length");
+            require(controller.playheadMs() <= 10000.0 + 1e-9, "and the playhead is still valid");
+        }
+
+        // --- operations at the playhead ---------------------------------------
+        {
+            TimelineController controller;
+            require(controller.load(project), "loaded");
+            // Splitting exactly at the start would make an empty segment, so it is
+            // refused with a message that says what to do instead.
+            require(!controller.splitAtPlayhead(), "splitting at the very start is refused");
+            require(!controller.error().isEmpty(), "and says why");
+            require(!controller.canUndo(), "without recording a history step");
+
+            controller.setPlayheadRatio(0.5);
+            require(controller.splitAtPlayhead(), "splitting in the middle works");
+            require(controller.segments().size() == 2, "into two segments");
+
+            // A join of the two operations a UI actually offers: put the playhead
+            // somewhere, cut a span around it. The span is centred on the playhead.
+            TimelineController second;
+            require(second.load(project), "loaded");
+            second.setPlayheadRatio(0.5);
+            require(second.removeAroundPlayhead(2000.0), "removing a span around the playhead");
+            require(close(second.outputDurationMs(), 8000.0), "removed exactly the span");
+            // The two segments meet at output 4 s, and there the media jumps from
+            // 4 s to 6 s — the cut is centred on the playhead, so it removed one
+            // second before it and one after.
+            const QVariantList segments = second.segments();
+            require(segments.size() == 2, "two segments after one cut");
+            require(close(segments[0].toMap().value(QStringLiteral("sourceEndMs")).toDouble(), 4000.0),
+                "the first segment ends where the cut begins");
+            require(close(segments[1].toMap().value(QStringLiteral("sourceStartMs")).toDouble(), 6000.0),
+                "and the second resumes two seconds later");
+
+            require(!second.removeAroundPlayhead(0.0), "a zero-length removal is refused");
+            require(!second.removeAroundPlayhead(-500.0), "and so is a negative one");
+            require(!second.error().isEmpty(), "both report a reason");
+        }
+
         // --- no project -------------------------------------------------------
         {
             TimelineController controller;

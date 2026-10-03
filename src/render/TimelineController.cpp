@@ -45,6 +45,100 @@ double TimelineController::outputRatio() const {
     return source > 0.0 ? timeline_.outputDurationMs() / source : 1.0;
 }
 
+double TimelineController::playheadRatio() const {
+    return TimelineGeometry::ratioForTime(playheadMs_, timeline_.outputDurationMs());
+}
+
+QString TimelineController::playheadLabel() const {
+    return TimelineGeometry::tickLabel(playheadMs_, 10.0);
+}
+
+QVariantList TimelineController::rulerTicks() const {
+    QVariantList ticks;
+    const double duration = timeline_.outputDurationMs();
+    if (!loaded_ || duration <= 0.0)
+        return ticks;
+    // The strip is a fixed-width widget, so a nominal width is used for the spacing
+    // rule; the QML side lays the ticks out by ratio, so the exact width only
+    // affects how many there are.
+    const double step = TimelineGeometry::niceTickStepMs(duration, 900.0, 70.0);
+    for (const double time : TimelineGeometry::tickTimes(duration, step)) {
+        ticks.append(QVariantMap{
+            {QStringLiteral("timeMs"), time},
+            {QStringLiteral("ratio"), TimelineGeometry::ratioForTime(time, duration)},
+            {QStringLiteral("label"), TimelineGeometry::tickLabel(time, step)}});
+    }
+    return ticks;
+}
+
+void TimelineController::setFrameRate(double fps) {
+    const double next = fps > 0.0 ? 1000.0 / fps : 0.0;
+    if (std::abs(next - frameDurationMs_) <= 1e-9)
+        return;
+    frameDurationMs_ = next;
+    emit playheadChanged();
+}
+
+void TimelineController::setPlayheadMs(double ms) {
+    const double clamped = std::clamp(ms, 0.0, std::max(0.0, timeline_.outputDurationMs()));
+    if (std::abs(clamped - playheadMs_) <= 1e-9)
+        return;
+    playheadMs_ = clamped;
+    emit playheadChanged();
+}
+
+void TimelineController::setPlayheadRatio(double ratio) {
+    setPlayheadMs(TimelineGeometry::timeAtRatio(ratio, timeline_.outputDurationMs()));
+}
+
+double TimelineController::snappedPlayheadMs() const {
+    if (!timeline_.valid())
+        return 0.0;
+    // Clamped after snapping too: rounding up at the very end would put the
+    // playhead one frame past the last frame, where an operation is refused.
+    const double snapped = TimelineGeometry::snapToFrame(playheadMs_, frameDurationMs_);
+    return std::clamp(snapped, 0.0, timeline_.outputDurationMs());
+}
+
+bool TimelineController::splitAtPlayhead() {
+    if (!timeline_.valid())
+        return false;
+    const double at = snappedPlayheadMs();
+    // A split exactly at either end would create an empty segment, which the model
+    // refuses; saying so here is friendlier than a generic failure.
+    if (at <= 0.0 || at >= timeline_.outputDurationMs()) {
+        setError(QStringLiteral("请把播放头移到片段中间再切分"));
+        return false;
+    }
+    return splitAt(at);
+}
+
+bool TimelineController::removeAroundPlayhead(double spanMs) {
+    if (!timeline_.valid())
+        return false;
+    if (!(spanMs > 0.0)) {
+        setError(QStringLiteral("删除长度必须大于 0"));
+        return false;
+    }
+    const double centre = snappedPlayheadMs();
+    const double from = std::max(0.0, centre - spanMs / 2.0);
+    const double to = std::min(timeline_.outputDurationMs(), centre + spanMs / 2.0);
+    if (to - from <= 1e-6) {
+        setError(QStringLiteral("请把播放头移到要删除的位置"));
+        return false;
+    }
+    return removeRange(from, to);
+}
+
+void TimelineController::clampPlayhead() {
+    const double limit = std::max(0.0, timeline_.outputDurationMs());
+    const double clamped = std::clamp(playheadMs_, 0.0, limit);
+    if (std::abs(clamped - playheadMs_) <= 1e-9)
+        return;
+    playheadMs_ = clamped;
+    emit playheadChanged();
+}
+
 void TimelineController::setError(const QString &message) {
     if (error_ == message)
         return;
@@ -77,7 +171,10 @@ bool TimelineController::load(const QString &projectDirectory) {
     redo_.clear();
     loaded_ = timeline_.valid();
     setError(loaded_ ? QString() : timeline_.error());
+    playheadMs_ = 0.0;
     emit changed();
+    emit rulerChanged();
+    emit playheadChanged();
     emit timelineChanged();
     return loaded_;
 }
@@ -88,8 +185,11 @@ void TimelineController::clear() {
     redo_.clear();
     projectDirectory_.clear();
     loaded_ = false;
+    playheadMs_ = 0.0;
     setError(QString());
     emit changed();
+    emit rulerChanged();
+    emit playheadChanged();
     emit timelineChanged();
 }
 
@@ -110,7 +210,11 @@ bool TimelineController::apply(const QString &failureMessage, Change &&change) {
     redo_.clear();
     timeline_ = next;
     setError(QString());
+    // The output length may have changed, so the playhead can now be past the end
+    // and the ruler's ticks are stale.
+    clampPlayhead();
     emit changed();
+    emit rulerChanged();
     emit timelineChanged();
     return true;
 }
@@ -154,7 +258,9 @@ void TimelineController::reset() {
     redo_.clear();
     timeline_ = Project::EditTimeline::whole(timeline_.sourceDurationMs());
     setError(QString());
+    clampPlayhead();
     emit changed();
+    emit rulerChanged();
     emit timelineChanged();
 }
 
@@ -165,7 +271,9 @@ void TimelineController::undo() {
     timeline_ = undo_.back();
     undo_.pop_back();
     setError(QString());
+    clampPlayhead();
     emit changed();
+    emit rulerChanged();
     emit timelineChanged();
 }
 
@@ -176,7 +284,9 @@ void TimelineController::redo() {
     timeline_ = redo_.back();
     redo_.pop_back();
     setError(QString());
+    clampPlayhead();
     emit changed();
+    emit rulerChanged();
     emit timelineChanged();
 }
 

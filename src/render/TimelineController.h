@@ -2,6 +2,8 @@
 
 #include "../project/EditTimeline.h"
 
+#include "TimelineGeometry.h"
+
 #include <QObject>
 #include <QVariantList>
 #include <QString>
@@ -33,6 +35,14 @@ class TimelineController final : public QObject {
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
     // The exported length as a proportion of the recording, for a one-glance label.
     Q_PROPERTY(double outputRatio READ outputRatio NOTIFY changed)
+    // Output time the playhead sits at. Clamped to the timeline, and moved by the
+    // operations so a cut does not leave the playhead past the end.
+    Q_PROPERTY(double playheadMs READ playheadMs NOTIFY playheadChanged)
+    Q_PROPERTY(double playheadRatio READ playheadRatio NOTIFY playheadChanged)
+    // Tick times and their labels for the strip's ruler, recomputed when the output
+    // length changes. Done here rather than in QML so the same arithmetic is tested.
+    Q_PROPERTY(QVariantList rulerTicks READ rulerTicks NOTIFY rulerChanged)
+    Q_PROPERTY(QString playheadLabel READ playheadLabel NOTIFY playheadChanged)
 
 public:
     explicit TimelineController(QObject *parent = nullptr);
@@ -49,6 +59,23 @@ public:
     QVariantList segments() const;
     QString error() const { return error_; }
     double outputRatio() const;
+    double playheadMs() const { return playheadMs_; }
+    double playheadRatio() const;
+    QString playheadLabel() const;
+    QVariantList rulerTicks() const;
+
+    // Frame duration used for snapping, from the export frame rate. 0 disables
+    // snapping, which is what an unknown rate should do.
+    Q_INVOKABLE void setFrameRate(double fps);
+    Q_INVOKABLE void setPlayheadRatio(double ratio);
+    Q_INVOKABLE void setPlayheadMs(double ms);
+    // Where the next operation will apply, snapped to a frame. Exposed so the UI
+    // and a test agree on what "here" means.
+    Q_INVOKABLE double snappedPlayheadMs() const;
+    // Splits / cuts at the playhead. Thin wrappers so the UI cannot apply a
+    // different time than the one it is showing.
+    Q_INVOKABLE bool splitAtPlayhead();
+    Q_INVOKABLE bool removeAroundPlayhead(double spanMs);
 
     const Project::EditTimeline &timeline() const { return timeline_; }
 
@@ -71,6 +98,8 @@ public:
 signals:
     void changed();
     void errorChanged();
+    void playheadChanged();
+    void rulerChanged();
     // Emitted for every successful change, so the exporter can pick the timeline up.
     void timelineChanged();
 
@@ -81,12 +110,16 @@ private:
     bool apply(const QString &failureMessage, Change &&change);
 
     void setError(const QString &message);
+    // Clamps the playhead to the timeline and announces it only when it moved.
+    void clampPlayhead();
 
     Project::EditTimeline timeline_;
     std::vector<Project::EditTimeline> undo_;
     std::vector<Project::EditTimeline> redo_;
     QString projectDirectory_;
     QString error_;
+    double playheadMs_ = 0.0;
+    double frameDurationMs_ = 0.0;
     bool loaded_ = false;
 };
 
