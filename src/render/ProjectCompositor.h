@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CanvasLayout.h"
+#include "CanvasRenderer.h"
 #include "MotionBlur.h"
 
 #include "../animation/CursorEngine.h"
@@ -130,22 +131,7 @@ struct MotionBlurSettings {
 
 // Settings the compositor honours, resolved once from the project map.
 struct ComposerSettings {
-    QSizeF canvasSize;    double paddingPercent = 0.0;
-    double radius = 0.0;
-    double insetSize = 0.0;
-    QColor insetColor;
-    double insetAlpha = 0.5;
-    double shadowIntensity = 0.0;
-    double shadowAngle = 90.0;
-    double shadowDistance = 0.0;
-    double shadowBlur = 0.0;
-    double backgroundBlur = 0.0;
-    QString backgroundType = QStringLiteral("gradient");
-    QColor backgroundColor;
-    QColor gradientStart;
-    QColor gradientEnd;
-    double gradientAngle = 135.0;
-    QString backgroundImagePath;
+    CanvasStyle canvas;
     double cursorSizeFactor = 1.5;
     bool hideCursor = false;
 
@@ -182,14 +168,15 @@ struct BlurPlan {
 struct ComposeContext {
     ProjectData project;
     ComposerSettings settings;
-    CanvasLayout layout;
-    QImage background;
-    QImage shadow;
+    // Background, layout, shadow and the resolved canvas size. Shared with the
+    // preview and the screenshot, so all three draw the same packaging.
+    CanvasPlan canvasPlan;
     bool valid = false;
     QString error;
 
-    int width() const { return static_cast<int>(settings.canvasSize.width()); }
-    int height() const { return static_cast<int>(settings.canvasSize.height()); }
+    const CanvasLayout &layout() const { return canvasPlan.layout; }
+    int width() const { return canvasPlan.width(); }
+    int height() const { return canvasPlan.height(); }
 };
 
 ComposeContext makeComposeContext(ProjectData project, const QString &backgroundRoot,

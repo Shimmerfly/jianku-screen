@@ -268,11 +268,11 @@ int main(int argc, char **argv) {
             QStringLiteral(JIANKU_SOURCE_DIR "/assets/backgrounds"));
         require(context.valid, "context builds");
         require(context.width() == 1000 && context.height() == 500, "auto canvas keeps source size");
-        require(close(context.layout.padding, 50.0), "padding is 10% of the canvas short side");
+        require(close(context.layout().padding, 50.0), "padding is 10% of the canvas short side");
         // padded box = 900×400; a 2:1 source contained in it is height-limited.
-        require(close(context.layout.contentRect.height(), 400.0), "content fills the padded height");
-        require(close(context.layout.contentRect.width(), 800.0), "content keeps aspect ratio");
-        require(close(context.layout.contentRect.center().x(), context.width() / 2.0),
+        require(close(context.layout().contentRect.height(), 400.0), "content fills the padded height");
+        require(close(context.layout().contentRect.width(), 800.0), "content keeps aspect ratio");
+        require(close(context.layout().contentRect.center().x(), context.width() / 2.0),
             "content stays centred");
 
         // --- cursor shape selection ---------------------------------------
@@ -314,7 +314,7 @@ int main(int argc, char **argv) {
 
             // Background shows at the canvas edge, content sits inside the padding.
             require(canvas.pixelColor(2, 250) != QColor(0, 255, 0), "background fills the padding");
-            const QPoint inside = context.layout.contentRect.center().toPoint();
+            const QPoint inside = context.layout().contentRect.center().toPoint();
             require(canvas.pixelColor(inside) == QColor(0, 255, 0), "source is drawn in the frame");
 
             const QImage withoutCursor = composeFrame(context, source, CameraPose{1.0, 0.0, 0.0},

@@ -97,143 +97,7 @@ Animation::InputKind kindFor(const QString &type) {
     return Animation::InputKind::Move;
 }
 
-QColor colorFrom(const QVariantMap &settings, const char *key, const QColor &fallback) {
-    const QColor color(settings.value(QLatin1String(key)).toString());
-    return color.isValid() ? color : fallback;
-}
-
-// Separable box blur, repeated to approximate a Gaussian. Both callers cache the
-// result (background and shadow sprite), so this never runs per frame.
-void boxBlur(QImage &image, int radius, int passes) {
-    if (radius <= 0 || image.isNull() || passes <= 0)
-        return;
-    const int width = image.width();
-    const int height = image.height();
-    QImage scratch(image.size(), QImage::Format_ARGB32_Premultiplied);
-    std::vector<int> channel(std::max(width, height));
-
-    for (int pass = 0; pass < passes; ++pass) {
-        for (int y = 0; y < height; ++y) {
-            const QRgb *src = reinterpret_cast<const QRgb *>(image.constScanLine(y));
-            QRgb *dst = reinterpret_cast<QRgb *>(scratch.scanLine(y));
-            for (int component = 0; component < 4; ++component) {
-                int sum = 0;
-                const int shift = component * 8;
-                for (int x = -radius; x <= radius; ++x)
-                    sum += (src[std::clamp(x, 0, width - 1)] >> shift) & 0xff;
-                const int count = 2 * radius + 1;
-                for (int x = 0; x < width; ++x) {
-                    channel[x] = sum / count;
-                    const int outgoing = std::clamp(x - radius, 0, width - 1);
-                    const int incoming = std::clamp(x + radius + 1, 0, width - 1);
-                    sum += ((src[incoming] >> shift) & 0xff) - ((src[outgoing] >> shift) & 0xff);
-                }
-                for (int x = 0; x < width; ++x)
-                    dst[x] = (dst[x] & ~(0xff << shift)) | (channel[x] << shift);
-            }
-        }
-        for (int x = 0; x < width; ++x) {
-            for (int component = 0; component < 4; ++component) {
-                const int shift = component * 8;
-                int sum = 0;
-                for (int y = -radius; y <= radius; ++y)
-                    sum += (reinterpret_cast<const QRgb *>(scratch.constScanLine(
-                                std::clamp(y, 0, height - 1)))[x] >> shift) & 0xff;
-                const int count = 2 * radius + 1;
-                for (int y = 0; y < height; ++y) {
-                    channel[y] = sum / count;
-                    const int outgoing = std::clamp(y - radius, 0, height - 1);
-                    const int incoming = std::clamp(y + radius + 1, 0, height - 1);
-                    sum += ((reinterpret_cast<const QRgb *>(scratch.constScanLine(incoming))[x] >> shift) & 0xff)
-                        - ((reinterpret_cast<const QRgb *>(scratch.constScanLine(outgoing))[x] >> shift) & 0xff);
-                }
-                for (int y = 0; y < height; ++y) {
-                    QRgb *dst = reinterpret_cast<QRgb *>(image.scanLine(y));
-                    dst[x] = (dst[x] & ~(0xff << shift)) | (channel[y] << shift);
-                }
-            }
-        }
-    }
-}
-
-QImage buildBackground(const ComposerSettings &settings, const QSize &size) {
-    QImage image(size, QImage::Format_ARGB32_Premultiplied);
-    image.fill(settings.backgroundColor);
-    QPainter painter(&image);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform);
-
-    const QString type = settings.backgroundType;
-    if (type == QStringLiteral("image") || type == QStringLiteral("system")) {
-        QImage source(settings.backgroundImagePath);
-        if (!source.isNull()) {
-            const QSize scaled = source.size().scaled(size, Qt::KeepAspectRatioByExpanding);
-            const QRect target((size.width() - scaled.width()) / 2,
-                (size.height() - scaled.height()) / 2, scaled.width(), scaled.height());
-            painter.drawImage(target, source);
-        }
-    } else if (type == QStringLiteral("gradient")) {
-        // The preview rotates a square gradient by gradientAngle; reproducing it
-        // as a linear gradient along that angle keeps both ends visible.
-        const QPointF centre(size.width() / 2.0, size.height() / 2.0);
-        const double radians = settings.gradientAngle * M_PI / 180.0;
-        const double half = std::hypot(double(size.width()), double(size.height())) / 2.0;
-        QLinearGradient gradient(
-            QPointF(centre.x() - std::cos(radians) * half, centre.y() - std::sin(radians) * half),
-            QPointF(centre.x() + std::cos(radians) * half, centre.y() + std::sin(radians) * half));
-        gradient.setColorAt(0.0, settings.gradientStart);
-        gradient.setColorAt(1.0, settings.gradientEnd);
-        painter.fillRect(QRect(QPoint(0, 0), size), gradient);
-    }
-    painter.end();
-
-    if (settings.backgroundBlur > 0.001) {
-        // The reference maps its 0..40 slider onto a blur radius; the exact curve
-        // is not verified, so keep it proportional and leave the UI honest.
-        const int radius = static_cast<int>(std::round(settings.backgroundBlur * 0.25));
-        boxBlur(image, std::max(1, radius), 2);
-    }
-    return image;
-}
-
-QImage buildShadowSprite(const QSizeF &frameSize, const ComposerSettings &settings) {
-    const int pad = static_cast<int>(std::ceil(settings.shadowBlur)) + 8;
-    const int width = static_cast<int>(std::ceil(frameSize.width())) + pad * 2;
-    const int height = static_cast<int>(std::ceil(frameSize.height())) + pad * 2;
-    if (width <= 0 || height <= 0)
-        return {};
-    QImage image(width, height, QImage::Format_ARGB32_Premultiplied);
-    image.fill(Qt::transparent);
-    QPainter painter(&image);
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(0, 0, 0, static_cast<int>(std::clamp(settings.shadowIntensity, 0.0, 1.0) * 255)));
-    painter.drawRoundedRect(QRectF(pad, pad, frameSize.width(), frameSize.height()),
-        settings.radius, settings.radius);
-    painter.end();
-    if (settings.shadowBlur > 0.0)
-        boxBlur(image, std::max(1, static_cast<int>(std::round(settings.shadowBlur / 2.0))), 3);
-    return image;
-}
-
-QString findBackground(const QString &backgroundRoot, const QString &name) {
-    if (name.isEmpty())
-        return {};
-    const QStringList roots{backgroundRoot, QStringLiteral(JIANKU_SOURCE_DIR "/assets/backgrounds")};
-    for (const QString &root : roots) {
-        if (root.isEmpty())
-            continue;
-        const QString candidate = root + QLatin1Char('/') + name;
-        if (QFileInfo::exists(candidate))
-            return candidate;
-    }
-    return {};
-}
-
 } // namespace
-
-// ---------------------------------------------------------------------------
-// Loading
-// ---------------------------------------------------------------------------
 
 ProjectData loadProject(const QString &directory, QString *errorOut) {
     ProjectData data;
@@ -456,24 +320,8 @@ ComposeContext makeComposeContext(ProjectData project, const QString &background
 
     const QVariantMap &map = context.project.settings;
     ComposerSettings &settings = context.settings;
-    settings.canvasSize = canvasSizeForAspect(context.project.sourceSize,
-        map.value(QStringLiteral("outputAspectRatio")).toString());
-    settings.paddingPercent = map.value(QStringLiteral("backgroundPaddingRatio")).toDouble();
-    settings.radius = map.value(QStringLiteral("windowBorderRadius")).toDouble();
-    settings.insetSize = map.value(QStringLiteral("insetSize")).toDouble();
-    settings.insetColor = colorFrom(map, "insetColor", QColor(QStringLiteral("#000000")));
-    settings.insetAlpha = map.value(QStringLiteral("insetAlpha"), 0.5).toDouble();
-    settings.shadowIntensity = map.value(QStringLiteral("shadowIntensity")).toDouble();
-    settings.shadowAngle = map.value(QStringLiteral("shadowAngle"), 90.0).toDouble();
-    settings.shadowDistance = map.value(QStringLiteral("shadowDistance")).toDouble();
-    settings.shadowBlur = map.value(QStringLiteral("shadowBlur")).toDouble();
-    settings.backgroundBlur = map.value(QStringLiteral("backgroundBlur")).toDouble();
-    settings.backgroundType = map.value(QStringLiteral("backgroundType"),
-        QStringLiteral("gradient")).toString();
-    settings.backgroundColor = colorFrom(map, "backgroundColor", QColor(QStringLiteral("#1b2230")));
-    settings.gradientStart = colorFrom(map, "gradientStartColor", QColor(QStringLiteral("#3F37C9")));
-    settings.gradientEnd = colorFrom(map, "gradientEndColor", QColor(QStringLiteral("#8C87DF")));
-    settings.gradientAngle = map.value(QStringLiteral("gradientAngle"), 135.0).toDouble();
+    // One settings→style mapping, shared with the preview and the screenshot.
+    settings.canvas = canvasStyleFromMap(map, backgroundRoot);
     settings.cursorSizeFactor = map.value(QStringLiteral("cursorSize"), 1.5).toDouble();
     settings.hideCursor = map.value(QStringLiteral("hideCursor")).toBool();
 
@@ -497,36 +345,16 @@ ComposeContext makeComposeContext(ProjectData project, const QString &background
     applyMotionBlurOverrides(merged, blurOverride);
     blur = merged;
 
-    if (settings.backgroundType == QStringLiteral("image")) {
-        const QString path = map.value(QStringLiteral("backgroundImagePath")).toString();
-        if (!path.isEmpty() && QFileInfo::exists(path))
-            settings.backgroundImagePath = path;
-    } else if (settings.backgroundType == QStringLiteral("system")) {
-        settings.backgroundImagePath = findBackground(backgroundRoot,
-            map.value(QStringLiteral("backgroundSystemName")).toString());
-    }
-
-    CanvasLayoutInput layoutInput;
-    layoutInput.canvas = settings.canvasSize;
-    layoutInput.content = context.project.sourceSize;
-    layoutInput.paddingPercent = settings.paddingPercent;
-    layoutInput.radius = settings.radius;
-    layoutInput.inset = settings.insetSize;
-    context.layout = computeCanvasLayout(layoutInput);
-    if (!context.layout.valid) {
-        context.error = QStringLiteral("画布布局计算失败：来源或画布尺寸无效");
+    // The canvas is fixed for an export (the output size), so the content is
+    // contained inside it; the aspect ratio setting decides that size.
+    context.canvasPlan = planCanvas(settings.canvas,
+        canvasSizeForAspect(context.project.sourceSize,
+            map.value(QStringLiteral("outputAspectRatio")).toString()),
+        context.project.sourceSize);
+    if (!context.canvasPlan.valid) {
+        context.error = context.canvasPlan.error;
         return context;
     }
-
-    const QSize canvasSize(context.width(), context.height());
-    if (canvasSize.width() < 2 || canvasSize.height() < 2) {
-        context.error = QStringLiteral("画布尺寸过小");
-        return context;
-    }
-    context.background = buildBackground(settings, canvasSize);
-    if (settings.shadowIntensity > 0.001)
-        context.shadow = buildShadowSprite(context.layout.frameRect.size(), settings);
-
     context.valid = true;
     return context;
 }
@@ -617,8 +445,8 @@ namespace {
 // not on the spring's raw velocity.
 MotionBlur::LayerMotion screenMotion(const ComposeContext &context, const CameraPose &previous,
     const CameraPose &current) {
-    const QRectF frame = context.layout.frameRect;
-    const double fit = context.layout.fitScale;
+    const QRectF frame = context.layout().frameRect;
+    const double fit = context.layout().fitScale;
     auto centreAt = [&](const CameraPose &camera) {
         return frame.center() + QPointF(camera.offsetX * fit, camera.offsetY * fit);
     };
@@ -637,7 +465,7 @@ MotionBlur::LayerMotion screenMotion(const ComposeContext &context, const Camera
 MotionBlur::LayerMotion cursorMotion(const ComposeContext &context, const CursorDefinition &shape,
     const CameraPose &previousCamera, const CursorPose &previousCursor, const CameraPose &camera,
     const CursorPose &cursor) {
-    const CanvasLayout &layout = context.layout;
+    const CanvasLayout &layout = context.layout();
     const QRectF frame = layout.frameRect;
     const double fit = layout.fitScale;
     const double size = std::max(2.0, shape.widthPx * fit * context.settings.cursorSizeFactor);
@@ -713,7 +541,7 @@ QImage composeFrame(const ComposeContext &context, const QImage &source,
         return {};
 
     const ComposerSettings &settings = context.settings;
-    const CanvasLayout &layout = context.layout;
+    const CanvasLayout &layout = context.layout();
     const QSize canvasSize(context.width(), context.height());
     const QRectF frameRect = layout.frameRect;
     const double fitScale = layout.fitScale;
@@ -724,19 +552,22 @@ QImage composeFrame(const ComposeContext &context, const QImage &source,
     QPainter painter(&canvas);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setRenderHint(QPainter::SmoothPixmapTransform);
-    painter.drawImage(0, 0, context.background);
+    // Background is static: it never moves with the camera, so it is drawn once
+    // and is deliberately not part of any blur.
+    painter.drawImage(0, 0, context.canvasPlan.background);
 
     // With the camera at rest the whole composition sits exactly on the layout
     // the preview and the screenshot use; the transform only ever moves it.
     const double cameraX = camera.offsetX * fitScale;
     const double cameraY = camera.offsetY * fitScale;
 
-    // Shadow first: offset along the configured angle, behind the frame.
-    if (settings.shadowIntensity > 0.001 && !context.shadow.isNull()) {
-        const QImage &shadow = context.shadow;
-        const double radians = settings.shadowAngle * M_PI / 180.0;
-        const QPointF offset(std::cos(radians) * settings.shadowDistance,
-            std::sin(radians) * settings.shadowDistance);
+    // Shadow first: offset along the configured angle, behind the frame. Unlike the
+    // preview it follows the camera, because here the frame really does move.
+    if (settings.canvas.shadowIntensity > 0.001 && !context.canvasPlan.shadow.isNull()) {
+        const QImage &shadow = context.canvasPlan.shadow;
+        const double radians = settings.canvas.shadowAngle * M_PI / 180.0;
+        const QPointF offset(std::cos(radians) * settings.canvas.shadowDistance,
+            std::sin(radians) * settings.canvas.shadowDistance);
         painter.save();
         painter.translate(frameRect.topLeft() + QPointF(cameraX, cameraY));
         painter.scale(camera.scale, camera.scale);
@@ -762,9 +593,9 @@ QImage composeFrame(const ComposeContext &context, const QImage &source,
 
     QPainterPath framePath;
     framePath.addRoundedRect(QRectF(0.0, 0.0, frameRect.width(), frameRect.height()),
-        settings.radius, settings.radius);
+        settings.canvas.radius, settings.canvas.radius);
     screenPainter.setClipPath(framePath);
-    screenPainter.fillPath(framePath, QColor(QStringLiteral("#101013")));
+    screenPainter.fillPath(framePath, QColor(QString::fromLatin1(kFrameColor)));
 
     // layout.contentRect is in canvas coordinates; shift it into frame-local.
     const QRectF contentRect(layout.contentRect.x() - frameRect.x(),
@@ -772,19 +603,9 @@ QImage composeFrame(const ComposeContext &context, const QImage &source,
         layout.contentRect.width(), layout.contentRect.height());
     screenPainter.drawImage(contentRect, source);
 
-    // Inset border: drawn on the frame edge, inside the rounded corners.
-    if (settings.insetSize > 0.01) {
-        QColor insetColor = settings.insetColor;
-        insetColor.setAlphaF(static_cast<float>(std::clamp(settings.insetAlpha, 0.0, 1.0)));
-        QPen pen(insetColor);
-        pen.setWidthF(settings.insetSize);
-        screenPainter.setPen(pen);
-        screenPainter.setBrush(Qt::NoBrush);
-        const double half = settings.insetSize / 2.0;
-        const double radius = std::max(0.0, settings.radius - half);
-        screenPainter.drawRoundedRect(QRectF(half, half, frameRect.width() - settings.insetSize,
-            frameRect.height() - settings.insetSize), radius, radius);
-    }
+    // Inset border: drawn on the frame edge, inside the rounded corners. Same
+    // helper the screenshot path uses, so the two cannot drift.
+    drawInsetBorder(screenPainter, context.canvasPlan);
     screenPainter.end();
 
     if (blur && blur->screen.channel == MotionBlur::Channel::Move)

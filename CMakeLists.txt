@@ -32,6 +32,8 @@ qt_add_executable(jianku-screen MACOSX_BUNDLE
     src/render/MotionBlur.h
     src/render/CanvasLayout.cpp
     src/render/CanvasLayout.h
+    src/render/CanvasRenderer.cpp
+    src/render/CanvasRenderer.h
     src/render/ExportController.cpp
     src/render/ExportController.h
     src/animation/AnimationSettings.cpp
@@ -95,8 +97,9 @@ if(BUILD_TESTING)
     target_link_libraries(media-clock-tests PRIVATE Qt6::Core)
     add_test(NAME media-clock COMMAND media-clock-tests)
 
-    add_executable(canvas-layout-tests tests/CanvasLayoutTests.cpp src/render/CanvasLayout.cpp)
-    target_link_libraries(canvas-layout-tests PRIVATE Qt6::Core)
+    add_executable(canvas-layout-tests tests/CanvasLayoutTests.cpp src/render/CanvasLayout.cpp
+        src/render/CanvasRenderer.cpp)
+    target_link_libraries(canvas-layout-tests PRIVATE Qt6::Core Qt6::Gui)
     add_test(NAME canvas-layout COMMAND canvas-layout-tests)
 
     add_executable(capture-source-tests tests/CaptureSourceTests.cpp src/capture/CaptureSource.cpp)
@@ -109,6 +112,7 @@ if(BUILD_TESTING)
 
     add_executable(compositor-tests tests/CompositorTests.cpp
         src/render/ProjectCompositor.cpp src/render/CanvasLayout.cpp
+        src/render/CanvasRenderer.cpp
         src/animation/AnimationSettings.cpp src/animation/AutoFocusEngine.cpp
         src/animation/AutomaticZoom.cpp src/animation/CursorEngine.cpp
         src/animation/SpringSolver.cpp src/capture/CaptureSource.cpp
@@ -121,7 +125,7 @@ if(BUILD_TESTING)
 
     add_executable(export-controller-tests tests/ExportControllerTests.cpp
         src/render/ExportController.cpp src/render/ProjectCompositor.cpp
-        src/render/CanvasLayout.cpp src/animation/AnimationSettings.cpp
+        src/render/CanvasLayout.cpp src/render/CanvasRenderer.cpp src/animation/AnimationSettings.cpp
         src/animation/AutoFocusEngine.cpp src/animation/AutomaticZoom.cpp
         src/animation/CursorEngine.cpp src/animation/SpringSolver.cpp
         src/render/MotionBlur.cpp)
@@ -142,6 +146,8 @@ qt_add_executable(jianku-compose
     src/render/MotionBlur.h
     src/render/CanvasLayout.cpp
     src/render/CanvasLayout.h
+    src/render/CanvasRenderer.cpp
+    src/render/CanvasRenderer.h
     src/animation/AnimationSettings.cpp
     src/animation/AnimationSettings.h
     src/animation/AutoFocusEngine.cpp
