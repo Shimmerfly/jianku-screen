@@ -5,7 +5,7 @@
 - 项目根：`/Users/moyingxz/Documents/Zzx/05_项目开发/Jianku Screen`
 - 验证命令：`cd build && cmake --build . -j8 && ctest --output-on-failure`
 - 运行日志：`.dsh/unattended/`
-- 上次更新：2026-10-04 05:35
+- 上次更新：2026-10-04 05:55
 
 ## 授权边界（本次无人值守）
 
@@ -13,15 +13,15 @@
 不做（等用户回来决定）：`git push`、改 CI、装系统级软件、**修改或删除用户的录制素材**。
 额外约束：本仓库为**私有本地仓库**，不做任何远端配置。
 
-## 现状（2026-10-04 05:35）
+## 现状（2026-10-04 05:55）
 
 - 构建：`cmake --build build -j8` 通过，warning 归零。
 - 测试：`ctest` **15/15** 通过（timeline-boundaries、spring-solver、cursor-engine、
   auto-focus、media-clock、canvas-layout、capture-source、motion-blur、compositor、
   export-controller、canvas-renderer、edit-timeline、timeline-controller、
   timeline-geometry、timeline-strip）。
-- 版本历史：基线 `85af2cd`；此后 20 个提交，均在本地。
-- 本轮做了 10 件事，见 Q13–Q22。
+- 版本历史：基线 `85af2cd`；此后 21 个提交，均在本地。
+- 本轮做了 11 件事，见 Q13–Q23。
 - 权限：approval=never / danger-full-access，无人值守期间无审批阻塞。
 - 工作区无其他执行体（Trae 停在 23:38，报的是模型侧 4054，不是代码错误）。
 
@@ -284,6 +284,28 @@ CLI 加 `--system-volume` / `--microphone-volume`。
 `shadowIsDirectional`、`alwaysUseDefaultCursor`（4 个，其中 `alwaysUseDefaultCursor`
 的含义待查）。这几个都有官方静态值作为默认，属于「已存储、未实现」，
 在队列的「明确未做」里保持诚实标注。
+
+### Q23 指针的 y 轴原点没有独立核对过 ✅
+结论：这是个「两边都自洽时看不出来」的问题——事件记录器用
+`CGEventGetLocation`（Quartz，左上原点），合成器把 `cursor.y` 当「从顶部算」。
+两边都按左上就对、都按左下也自洽（只是画面上下颠倒），**混合**才错，
+而看代码两边都说得通。
+
+两种独立办法都量了：
+1. 探针直接问 API：`[NSEvent mouseLocation]` 与 `CGEventGetLocation` 的 y 之和
+   恒等于屏幕高度（1050 pt，5 次采样全等），确认前者左下、后者左上。
+2. **成片像素差分**：把「带指针」与「不带指针」的同参数成片逐像素相减，
+   直接量出指针画到了哪里。60 秒处光标静止（xPx=1680 yPx=322）且不在任何
+   缩放区间内，实测差分包围盒左上角 (1678, 391)，与「从顶部算」的预期
+   (1680, 388) 相符，与「从底部算」的 (1680, 1712) 差 1300 多像素。
+
+结论：**链路一致，没有上下颠倒。这一项没有改任何代码**——产出是「确认没问题」。
+证据：`.dsh/unattended/evidence/pointer-coordinates.md`。
+
+**过程中一次假警报值得记下**：第一次在 40 秒取样，量出指针中心 y≈790，
+看着像差一半。实际是 40 秒刚好落在缩放区间 37175..39990 ms 结束之后一点，
+**相机弹簧还在回位**，画面整体在动。换到 60 秒立刻对上。核对相机相关像素时
+必须避开缩放过渡段，否则量到的是相机运动。
 
 ## 待用户验证（无人值守期间做不了）
 
