@@ -1,7 +1,10 @@
 #pragma once
 
+#include "../capture/CaptureSource.h"
+
 #include <QObject>
 #include <QStringList>
+#include <QVariantList>
 #include <QVariantMap>
 #include <memory>
 
@@ -10,6 +13,9 @@ class VideoFrameStore;
 class MacCapture final : public QObject {
     Q_OBJECT
     Q_PROPERTY(QStringList displayNames READ displayNames NOTIFY displayNamesChanged)
+    // Window sources, as a QVariantList of {windowId, title, application, width,
+    // height} so QML can offer a picker without knowing about ScreenCaptureKit.
+    Q_PROPERTY(QVariantList windowSources READ windowSources NOTIFY windowSourcesChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(bool running READ running NOTIFY runningChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
@@ -28,6 +34,7 @@ public:
     ~MacCapture() override;
 
     QStringList displayNames() const { return displayNames_; }
+    QVariantList windowSources() const { return windowSources_; }
     QString status() const { return status_; }
     bool running() const { return running_; }
     bool busy() const { return busy_; }
@@ -40,7 +47,18 @@ public:
 
     Q_INVOKABLE void refreshDisplays();
     Q_INVOKABLE void startDisplay(int index);
+    // Window source by SCWindow.windowID (0 = none).
+    Q_INVOKABLE void startWindow(double windowId);
+    // Region source in global points; the display is picked from the region's
+    // centre so a drag across a monitor boundary still lands on a real display.
+    Q_INVOKABLE void startRegion(double x, double y, double width, double height);
     Q_INVOKABLE void startRecordingDisplay(int index, const QVariantMap &settings);
+    // Same, for the other two source kinds. They exist so the UI never has to
+    // sequence "start the source, then remember to start recording" itself.
+    Q_INVOKABLE void startRecordingWindow(double windowId, const QVariantMap &settings);
+    Q_INVOKABLE void startRecordingRegion(double x, double y, double width, double height,
+        const QVariantMap &settings);
+    // Records the currently running source; the UI calls this after startSource.
     Q_INVOKABLE void startRecording();
     Q_INVOKABLE void pauseRecording();
     Q_INVOKABLE void resumeRecording();
@@ -69,6 +87,7 @@ public:
 
 signals:
     void displayNamesChanged();
+    void windowSourcesChanged();
     void statusChanged();
     void runningChanged();
     void busyChanged();
@@ -84,7 +103,13 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
     std::shared_ptr<VideoFrameStore> frameStore_;
+
+    // One code path for every source kind. startDisplay/startWindow/startRegion
+    // only build a CaptureSource; everything below is source-agnostic.
+    void startSource(const Capture::CaptureSource &source);
+
     QStringList displayNames_;
+    QVariantList windowSources_;
     QString status_ = QStringLiteral("正在准备屏幕来源…");
     bool running_ = false;
     bool busy_ = false;
@@ -95,6 +120,9 @@ private:
     bool recordingPaused_ = false;
     bool recordingFinalizing_ = false;
     int activeDisplayIndex_ = -1;
+    // The source the running stream is capturing. Recorded verbatim in
+    // project.json so a project always states what it was made from.
+    Capture::CaptureSource activeSource_;
     QString recordingStatus_;
     QString lastRecordingPath_;
     QString lastProjectPath_;

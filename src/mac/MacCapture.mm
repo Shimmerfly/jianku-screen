@@ -71,6 +71,54 @@ qint64 timeNs(CMTime time) {
     return CMTimeConvertScale(time, 1000000000, kCMTimeRoundingMethod_RoundHalfAwayFromZero).value;
 }
 
+QRectF QRectFFromCGRect(CGRect rect) {
+    return QRectF(rect.origin.x, rect.origin.y, rect.size.width, rect.size.height);
+}
+
+// Used for diagnostics only; the manifest records the source kind and rect, not
+// this string, so a renamed window never invalidates an existing recording.
+QString sourceLabel(SCDisplay *display, SCWindow *window) {
+    if (window) {
+        const QString title = window.title ? QString::fromNSString(window.title) : QString();
+        const QString app = window.owningApplication && window.owningApplication.applicationName
+            ? QString::fromNSString(window.owningApplication.applicationName) : QString();
+        if (!title.isEmpty() && !app.isEmpty())
+            return app + QStringLiteral(" · ") + title;
+        return title.isEmpty() ? app : title;
+    }
+    return display
+        ? QStringLiteral("显示器 %1").arg(static_cast<int>(display.displayID))
+        : QStringLiteral("画面来源");
+}
+
+// Windows worth offering as a source: real windows with an owning app and a
+// usable frame. System chrome (menus, the dock, wallpaper) are windows too, but
+// recording them is never what the user meant.
+QVariantList windowSourceList(NSArray<SCWindow *> *windows) {
+    QVariantList list;
+    for (SCWindow *window in windows) {
+        if (!window.owningApplication || !window.onScreen)
+            continue;
+        const CGRect frame = window.frame;
+        if (frame.size.width < 80.0 || frame.size.height < 60.0)
+            continue;
+        list.append(QVariantMap{
+            {QStringLiteral("windowId"), static_cast<double>(window.windowID)},
+            {QStringLiteral("title"), window.title ? QString::fromNSString(window.title) : QString()},
+            {QStringLiteral("application"),
+                window.owningApplication.applicationName
+                    ? QString::fromNSString(window.owningApplication.applicationName) : QString()},
+            {QStringLiteral("label"), sourceLabel(nil, window)},
+            {QStringLiteral("width"), frame.size.width},
+            {QStringLiteral("height"), frame.size.height}});
+    }
+    std::sort(list.begin(), list.end(), [](const QVariant &a, const QVariant &b) {
+        return a.toMap().value(QStringLiteral("label")).toString()
+            < b.toMap().value(QStringLiteral("label")).toString();
+    });
+    return list;
+}
+
 bool writeProject(const QString &directory, const QJsonObject &manifest) {
     QSaveFile file(directory + QStringLiteral("/project.json"));
     const auto bytes = QJsonDocument(manifest).toJson();
@@ -515,12 +563,17 @@ struct MacCapture::Impl {
     MicrophoneRecorder *micRecorder = nil;
     NSArray<SCDisplay *> *displays = nil;
     NSArray<SCRunningApplication *> *applications = nil;
+    NSArray<SCWindow *> *windows = nil;
     SCStream *stream = nil;
     JiankuStreamReceiver *receiver = nil;
     SCStreamConfiguration *configuration = nil;
     PointerEventRecorder pointerRecorder;
     QString projectDirectory;
     QJsonObject projectManifest;
+    // Size the stream was configured with. Every frame arrives at exactly this
+    // size, so the writer and the manifest both take it from here instead of
+    // re-deriving it from whichever display happens to be current.
+    QSize sourcePixelSize;
     std::uint64_t generation = 0;
 };
 
@@ -711,6 +764,7 @@ void MacCapture::refreshDisplays() {
                 owner->setPermissionIssue({}, {});
                 owner->impl_->displays = content.displays;
                 owner->impl_->applications = content.applications;
+                owner->impl_->windows = content.windows;
                 QStringList names;
                 for (SCDisplay *display in content.displays) {
                     const QSize pixels = displayPixelSize(display);
@@ -719,6 +773,8 @@ void MacCapture::refreshDisplays() {
                 }
                 owner->displayNames_ = names;
                 emit owner->displayNamesChanged();
+                owner->windowSources_ = windowSourceList(content.windows);
+                emit owner->windowSourcesChanged();
                 owner->setBusy(false);
                 owner->setStatus(names.isEmpty()
                     ? QStringLiteral("没有可用显示器。请检查屏幕录制权限。")
@@ -728,32 +784,132 @@ void MacCapture::refreshDisplays() {
 }
 
 void MacCapture::startDisplay(int index) {
+    Capture::CaptureSource source;
+    source.kind = Capture::SourceKind::Display;
+    if (index >= 0 && index < static_cast<int>(impl_->displays.count))
+        source.displayId = impl_->displays[index].displayID;
+    startSource(source);
+}
+
+void MacCapture::startSource(const Capture::CaptureSource &source) {
     if (busy_ || running_)
         return;
-    if (index < 0 || index >= static_cast<int>(impl_->displays.count)) {
-        reportError(QStringLiteral("显示器选择无效"));
+    // A window source is not tied to a display by the caller, and the user may
+    // have dragged it since the picker was filled. Resolve the display from where
+    // the window actually is now; for displays and regions the caller's choice
+    // stands (startRegion already picked one from the region's centre).
+    std::uint32_t wantedDisplay = source.displayId;
+    if (source.kind == Capture::SourceKind::Window) {
+        SCWindow *found = nil;
+        for (SCWindow *candidate in impl_->windows) {
+            if (candidate.windowID == source.windowId)
+                found = candidate;
+        }
+        if (!found) {
+            reportError(QStringLiteral("这个窗口已经关闭，请重新选择来源"));
+            return;
+        }
+        QList<QRectF> frames;
+        for (SCDisplay *candidate in impl_->displays)
+            frames.append(QRectFFromCGRect(CGDisplayBounds(candidate.displayID)));
+        const QRectF frame = QRectFFromCGRect(found.frame);
+        const int index = Capture::displayIndexContaining(frame.center(), frames);
+        if (index >= 0)
+            wantedDisplay = impl_->displays[index].displayID;
+    }
+
+    SCDisplay *display = nil;
+    for (SCDisplay *candidate in impl_->displays) {
+        if (candidate.displayID == wantedDisplay)
+            display = candidate;
+    }
+    if (!display)
+        display = impl_->displays.firstObject;
+    if (!display) {
+        reportError(QStringLiteral("录制来源无效"));
         return;
     }
+    SCWindow *window = nil;
+    if (source.kind == Capture::SourceKind::Window) {
+        for (SCWindow *candidate in impl_->windows) {
+            if (candidate.windowID == source.windowId)
+                window = candidate;
+        }
+        if (!window) {
+            reportError(QStringLiteral("这个窗口已经关闭，请重新选择来源"));
+            return;
+        }
+    }
+
+    Capture::CaptureSource resolved = source;
+    resolved.displayId = display.displayID;
+    const QRectF displayBounds = QRectFFromCGRect(CGDisplayBounds(display.displayID));
+    const QRectF windowFrame = window ? QRectFFromCGRect(window.frame) : QRectF();
+    const Capture::CaptureGeometry geometry = Capture::resolveGeometry(resolved, displayBounds,
+        displayPixelSize(display), windowFrame);
+    if (!geometry.valid) {
+        reportError(geometry.error);
+        return;
+    }
+    // The manifest always records the rect that was really captured, so a window
+    // recording still states its geometry correctly after the window has moved.
+    resolved.regionPoints = geometry.boundsPoints;
+    if (resolved.label.isEmpty())
+        resolved.label = sourceLabel(display, window);
+
     setBusy(true);
     stopRequested_ = false;
-    activeDisplayIndex_ = index;
-    setStatus(QStringLiteral("正在启动屏幕采集…"));
-    SCDisplay *display = impl_->displays[index];
+    activeSource_ = resolved;
+    for (NSUInteger i = 0; i < impl_->displays.count; ++i) {
+        if (impl_->displays[i] == display)
+            activeDisplayIndex_ = static_cast<int>(i);
+    }
+    setStatus(source.kind == Capture::SourceKind::Display
+        ? QStringLiteral("正在启动屏幕采集…") : QStringLiteral("正在启动来源采集…"));
+
+    // Our own windows must never appear in a recording: they would show the
+    // preview of the recording inside the recording.
     NSString *bundleId = NSBundle.mainBundle.bundleIdentifier;
     NSMutableArray<SCRunningApplication *> *excluded = [NSMutableArray array];
     for (SCRunningApplication *app in impl_->applications) {
         if ([app.bundleIdentifier isEqualToString:bundleId])
             [excluded addObject:app];
     }
-    SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:display
-        excludingApplications:excluded exceptingWindows:@[]];
+
+    SCContentFilter *filter = nil;
+    if (window) {
+        // A desktop-independent window keeps producing its own pixels even while
+        // occluded, which is what a window recording is expected to show.
+        filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:window];
+    } else {
+        filter = [[SCContentFilter alloc] initWithDisplay:display
+            excludingApplications:excluded exceptingWindows:@[]];
+    }
+
     SCStreamConfiguration *config = [[SCStreamConfiguration alloc] init];
-    const QSize pixels = displayPixelSize(display);
+    const QSize pixels = geometry.pixelSize;
     config.width = pixels.width();
     config.height = pixels.height();
     config.pixelFormat = kCVPixelFormatType_32BGRA;
     config.minimumFrameInterval = CMTimeMake(1, 60);
     config.queueDepth = 3;
+    if (window) {
+        // Measured on this machine: leaving shadows on insets the window content
+        // by (64,49) px inside a frame that is still sized window.frame × scale,
+        // so the content and the recorded rect would disagree — every pointer
+        // event of a window recording would be off by that margin. With shadows
+        // ignored the content starts at (0,0) and fills the frame.
+        config.ignoreShadowsSingleWindow = YES;
+    }
+    if (source.kind == Capture::SourceKind::Region) {
+        // sourceRect is in points relative to the display's top-left corner; the
+        // stream scales it up to the requested pixel size.
+        config.sourceRect = CGRectMake(geometry.boundsPoints.x() - displayBounds.x(),
+            geometry.boundsPoints.y() - displayBounds.y(),
+            geometry.boundsPoints.width(), geometry.boundsPoints.height());
+        config.scalesToFit = YES;
+        config.preservesAspectRatio = YES;
+    }
     // Never capture the system cursor: the animation engine composites its own
     // smoothed pointer, otherwise two cursors would be visible.
     config.showsCursor = NO;
@@ -791,6 +947,7 @@ void MacCapture::startDisplay(int index) {
     impl_->receiver = receiver;
     impl_->stream = stream;
     impl_->configuration = config;
+    impl_->sourcePixelSize = pixels;
     const std::uint64_t generation = ++impl_->generation;
     auto gate = impl_->gate;
     [stream startCaptureWithCompletionHandler:^(NSError *startError) {
@@ -817,16 +974,80 @@ void MacCapture::startDisplay(int index) {
     }];
 }
 
+void MacCapture::startRecordingWindow(double windowId, const QVariantMap &settings) {
+    if (recording_ || recordingFinalizing_ || busy_)
+        return;
+    recordingSettings_ = settings;
+    // A running stream is capturing whatever source it was started with; if that
+    // is a different one, restart it rather than silently recording the wrong
+    // thing under the new name.
+    if (running_ && activeSource_.kind == Capture::SourceKind::Window
+        && activeSource_.windowId == static_cast<std::uint32_t>(windowId)) {
+        startRecording();
+        return;
+    }
+    if (running_)
+        stop();
+    recordWhenReady_ = true;
+    startWindow(windowId);
+}
+
+void MacCapture::startRecordingRegion(double x, double y, double width, double height,
+    const QVariantMap &settings) {
+    if (recording_ || recordingFinalizing_ || busy_)
+        return;
+    recordingSettings_ = settings;
+    const QRectF region(x, y, width, height);
+    if (running_ && activeSource_.kind == Capture::SourceKind::Region
+        && activeSource_.regionPoints == region) {
+        startRecording();
+        return;
+    }
+    if (running_)
+        stop();
+    recordWhenReady_ = true;
+    startRegion(x, y, width, height);
+}
+
 void MacCapture::startRecordingDisplay(int index, const QVariantMap &settings) {
     if (recording_ || recordingFinalizing_ || busy_)
         return;
     recordingSettings_ = settings;
-    if (running_) {
+    if (running_ && activeSource_.kind == Capture::SourceKind::Display) {
         startRecording();
         return;
     }
+    if (running_)
+        stop();
     recordWhenReady_ = true;
     startDisplay(index);
+}
+
+void MacCapture::startWindow(double windowId) {
+    Capture::CaptureSource source;
+    source.kind = Capture::SourceKind::Window;
+    source.windowId = static_cast<std::uint32_t>(windowId);
+    startSource(source);
+}
+
+void MacCapture::startRegion(double x, double y, double width, double height) {
+    Capture::CaptureSource source;
+    source.kind = Capture::SourceKind::Region;
+    source.regionPoints = QRectF(x, y, width, height);
+    // Pick the display under the region's centre. A region dragged across a
+    // monitor boundary cannot be captured by either display in full, so the
+    // centre decides which one it belongs to and resolveGeometry crops it.
+    QList<QRectF> frames;
+    for (SCDisplay *display in impl_->displays)
+        frames.append(QRectFFromCGRect(CGDisplayBounds(display.displayID)));
+    const int index = Capture::displayIndexContaining(source.regionPoints.center(), frames);
+    if (index < 0) {
+        reportError(QStringLiteral("录制区域不在任何显示器上"));
+        return;
+    }
+    activeDisplayIndex_ = index;
+    source.displayId = impl_->displays[index].displayID;
+    startSource(source);
 }
 
 void MacCapture::startRecording() {
@@ -867,26 +1088,32 @@ void MacCapture::startRecording() {
         return;
     }
     const QString path = projectDirectory + QStringLiteral("/raw.mp4");
-    SCDisplay *display = activeDisplayIndex_ >= 0 && activeDisplayIndex_ < impl_->displays.count
-        ? impl_->displays[activeDisplayIndex_] : nil;
-    if (!display) {
+    if (!activeSource_.displayId) {
         setRecordingStatus(QStringLiteral("没有可用的录制来源"));
         return;
     }
     impl_->projectDirectory = projectDirectory;
-    const CGRect bounds = CGDisplayBounds(display.displayID);
-    const QSize pixels = displayPixelSize(display);
+    // The source block is the contract between a recording and everything that
+    // reads it later: the frame size, the global rect the pixels correspond to,
+    // and the kind of thing that was captured. A region or window recording whose
+    // rect were wrong here would put every pointer event in the wrong place.
+    Capture::CaptureSource recordedSource = activeSource_;
+    const QRectF bounds = recordedSource.regionPoints;
+    const QSize pixels = impl_->sourcePixelSize;
+    QJsonObject sourceJson = recordedSource.toJson();
+    sourceJson.insert(QStringLiteral("widthPx"), pixels.width());
+    sourceJson.insert(QStringLiteral("heightPx"), pixels.height());
+    sourceJson.insert(QStringLiteral("globalBoundsPoints"),
+        QJsonObject{{QStringLiteral("x"), bounds.x()}, {QStringLiteral("y"), bounds.y()},
+            {QStringLiteral("width"), bounds.width()}, {QStringLiteral("height"), bounds.height()}});
     impl_->projectManifest = {{"schemaVersion", 1}, {"application", "Jianku Screen"},
         {"animationModelVersion", "desktop-3.7.5-research-v1"}, {"state", "preparing"},
         {"createdAt", QDateTime::currentDateTime().toString(Qt::ISODateWithMs)},
         {"settings", QJsonObject::fromVariantMap(recordingSettings_)},
-        {"source", QJsonObject{{"type", "display"}, {"displayId", static_cast<int>(display.displayID)},
-            {"widthPx", pixels.width()}, {"heightPx", pixels.height()},
-            {"globalBoundsPoints", QJsonObject{{"x", bounds.origin.x}, {"y", bounds.origin.y},
-                {"width", bounds.size.width}, {"height", bounds.size.height}}}}}};
+        {"source", sourceJson}};
     lastProjectPath_ = projectDirectory;
     emit lastRecordingPathChanged();
-    if (!impl_->pointerRecorder.start(display.displayID, pixels, projectDirectory)) {
+    if (!impl_->pointerRecorder.start(recordedSource.displayId, pixels, bounds, projectDirectory)) {
         const QString failure = impl_->pointerRecorder.error();
         impl_->projectManifest.insert("state", "failed");
         impl_->projectManifest.insert("error", failure);
@@ -972,7 +1199,7 @@ void MacCapture::startRecording() {
         });
     };
     if (![impl_->receiver beginRecordingAtURL:[NSURL fileURLWithPath:path.toNSString()]
-        size:displayPixelSize(display) error:&error]) {
+        size:pixels error:&error]) {
         if (impl_->micRecorder) {
             [impl_->micRecorder stop];
             impl_->micRecorder = nil;

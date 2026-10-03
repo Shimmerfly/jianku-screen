@@ -57,8 +57,18 @@ Homebrew 的 ffmpeg 按名字根本找不到；ffmpeg/ffprobe 定位抽成
 控制器导出 → 回读成片确认 60 个输出帧）；空工程目录被拒绝而不是假装导出。
 应用启动无 QML 报错。提交 `e6b80bc`。
 
-### Q10 麦克风轨 `microphone.m4a` 未并入成片
-判据：合成输出同时带系统声音与麦克风，且两者时间对齐（需要先确认混音策略）。
+### Q10 麦克风轨 `microphone.m4a` 未并入成片 ✅
+结论：合成时按测得的偏移把麦克风混入。录制端在真正开始录音后打 host 时间戳写进
+`project.json`；导出端用它与视频首帧的差作为常量偏移（两边折叠同样的暂停区间，
+所以偏移全程不变）。麦克风晚于首帧用 `adelay` 推后，早于首帧用 `-ss` 裁掉开头。
+`amix` 用 `normalize=0` 保持录制电平。只有系统声音时仍走 `-c:a copy` 不重编码。
+**顺带查出一个一直存在的 bug**：`project.json` 里四个工程的 `microphone` 字段全是
+`true`——`impl_->projectManifest.insert("microphone", [micRecorder metadata])` 把
+NSDictionary 交给了 QJsonValue，重载解析落到指针转 bool。已加 `jsonFromDictionary()`
+显式转换，加载端同时兼容新旧两种格式。
+验证：真实工程成片音轨与源 `microphone.m4a` 互相关——最佳偏移 13.2 ms、
+相关系数 0.994；`volumedetect` 确认混音后电平上升（-91.0 dB → -66.1 dB）。
+提交 `c082ccc`、`a18c87c`。
 
 ### Q11 窗口与区域录制来源
 当前只有整屏。判据：`SCContentFilter` 支持窗口/区域，工程记录来源类型与裁切矩形。

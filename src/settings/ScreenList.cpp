@@ -19,9 +19,18 @@ QVariantList ScreenList::displays() const {
             {"name", screen->name()},
             {"width", geometry.width()},
             {"height", geometry.height()},
+            {"x", geometry.x()},
+            {"y", geometry.y()},
             {"primary", screen == QGuiApplication::primaryScreen()}});
     }
     return list;
+}
+
+QRectF ScreenList::unionGeometry() const {
+    QRect united;
+    for (QScreen *screen : QGuiApplication::screens())
+        united = united.united(screen->geometry());
+    return QRectF(united);
 }
 
 void ScreenList::placeWindowOnDisplay(QObject *window, int index, bool fullscreen) {

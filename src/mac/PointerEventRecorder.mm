@@ -206,13 +206,18 @@ struct PointerEventRecorder::Impl : std::enable_shared_from_this<Impl> {
 PointerEventRecorder::PointerEventRecorder() : impl_(std::make_shared<Impl>()) {}
 PointerEventRecorder::~PointerEventRecorder() { impl_->close(); }
 
-bool PointerEventRecorder::start(std::uint32_t displayId, const QSize &pixelSize, const QString &directory) {
+bool PointerEventRecorder::start(std::uint32_t displayId, const QSize &pixelSize,
+    const QRectF &boundsPoints, const QString &directory) {
     impl_->close(); impl_->failure.clear();
     impl_->eventCount = impl_->cursorCount = 0; impl_->tapInterruptions = 0;
     impl_->cursorDefinitions = {}; impl_->directory = directory;
-    impl_->displayId = displayId; impl_->displayBounds = CGDisplayBounds(displayId); impl_->pixelSize = pixelSize;
+    impl_->displayId = displayId; impl_->pixelSize = pixelSize;
+    // The capture rect comes from the caller: for a display source it is the
+    // display frame, for a window or region it is the clipped capture rectangle.
+    impl_->displayBounds = CGRectMake(boundsPoints.x(), boundsPoints.y(),
+        boundsPoints.width(), boundsPoints.height());
     if (!pixelSize.isValid() || impl_->displayBounds.size.width <= 0 || impl_->displayBounds.size.height <= 0) {
-        impl_->failure = QStringLiteral("显示器坐标无效"); return false;
+        impl_->failure = QStringLiteral("录制区域坐标无效"); return false;
     }
     if (!CGPreflightListenEventAccess() && !CGRequestListenEventAccess()) {
         impl_->failure = QStringLiteral("请在系统设置的“隐私与安全性 → 输入监控”中允许简库镜传，然后重新打开应用。");

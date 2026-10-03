@@ -15,14 +15,65 @@ ApplicationWindow {
 
     property string mode: "record"
     property string section: "background"
+    // Which kind of thing is being captured. Window and region sources share the
+    // whole pipeline with displays; only the filter and crop differ.
+    property string sourceKind: "display"
+    property rect region: Qt.rect(0, 0, 0, 0)
+    property bool regionSet: false
     property bool openPresentationWhenReady: false
     readonly property bool savingRecording: capture.recordingStatus.indexOf("正在保存") === 0
+    readonly property var windowLabels: {
+        const list = []
+        const windows = capture.windowSources
+        for (let i = 0; i < windows.length; ++i)
+            list.push(windows[i].label)
+        return list
+    }
     readonly property var outputOptions: {
         const list = ["虚拟窗口（可共享）"]
         const displays = screens.displays
         for (let i = 0; i < displays.length; ++i)
             list.push("输出到 " + displays[i].name + " · " + displays[i].width + "×" + displays[i].height)
         return list
+    }
+    // True when the currently selected kind has everything it needs to record.
+    readonly property bool sourceReady: root.sourceKind === "display"
+        ? displayChoice.count > 0 && displayChoice.currentIndex >= 0
+        : root.sourceKind === "window"
+        ? windowChoice.count > 0 && windowChoice.currentIndex >= 0
+        : root.regionSet
+
+    // Starts the selected source and begins recording once it is running.
+    function startRecording() {
+        if (root.sourceKind === "window") {
+            const windows = capture.windowSources
+            const index = windowChoice.currentIndex
+            if (index < 0 || index >= windows.length)
+                return
+            capture.startRecordingWindow(windows[index].windowId, settings.current)
+        } else if (root.sourceKind === "region") {
+            capture.startRecordingRegion(root.region.x, root.region.y,
+                root.region.width, root.region.height, settings.current)
+        } else {
+            capture.startRecordingDisplay(displayChoice.currentIndex, settings.current)
+        }
+    }
+
+    function startPreview() {
+        if (root.sourceKind === "window") {
+            const windows = capture.windowSources
+            const index = windowChoice.currentIndex
+            if (index < 0 || index >= windows.length)
+                return
+            capture.startWindow(windows[index].windowId)
+        } else if (root.sourceKind === "region") {
+            if (!root.regionSet)
+                return
+            capture.startRegion(root.region.x, root.region.y,
+                root.region.width, root.region.height)
+        } else {
+            capture.startDisplay(displayChoice.currentIndex)
+        }
     }
 
     function showAudience() {
@@ -45,6 +96,14 @@ ApplicationWindow {
     }
 
     OutputWindow { id: audience }
+
+    RegionSelector {
+        id: regionSelector
+        onPicked: (x, y, w, h) => {
+            root.region = Qt.rect(x, y, w, h)
+            root.regionSet = true
+        }
+    }
 
     Component.onCompleted: {
         anim.setSettings(settings.current)
@@ -197,11 +256,41 @@ ApplicationWindow {
                 Item { Layout.fillWidth: true }
 
                 Text { text: "来源"; color: Theme.textDim; font.pixelSize: 11 }
+                UiSegmented {
+                    id: sourceKindChoice
+                    Layout.preferredWidth: 132
+                    options: ["屏幕", "窗口", "区域"]
+                    currentIndex: root.sourceKind === "window" ? 1 : root.sourceKind === "region" ? 2 : 0
+                    enabled: !capture.running && !capture.busy
+                    onActivated: i => {
+                        root.sourceKind = i === 1 ? "window" : i === 2 ? "region" : "display"
+                        // A stale region would silently record the wrong rectangle.
+                        if (root.sourceKind !== "region") root.regionSet = false
+                    }
+                }
                 UiComboBox {
                     id: displayChoice
+                    visible: root.sourceKind === "display"
                     Layout.preferredWidth: 210
                     model: capture.displayNames
                     enabled: !capture.running && !capture.busy
+                }
+                UiComboBox {
+                    id: windowChoice
+                    visible: root.sourceKind === "window"
+                    Layout.preferredWidth: 210
+                    model: root.windowLabels
+                    enabled: !capture.running && !capture.busy && count > 0
+                }
+                UiButton {
+                    visible: root.sourceKind === "region"
+                    implicitWidth: 132
+                    text: root.regionSet
+                        ? Math.round(root.region.width) + " × " + Math.round(root.region.height)
+                        : "选择区域…"
+                    tone: root.regionSet ? "quiet" : "primary"
+                    enabled: !capture.running && !capture.busy
+                    onClicked: regionSelector.begin()
                 }
                 UiButton {
                     implicitWidth: 58
@@ -285,18 +374,18 @@ ApplicationWindow {
                     tone: (capture.recording || (root.mode === "present" && capture.running)) ? "danger"
                         : root.mode === "record" ? "record" : "primary"
                     enabled: root.mode === "record"
-                        ? (capture.recording || (!capture.busy && !root.savingRecording && displayChoice.count > 0))
-                        : (!capture.busy && (capture.running || displayChoice.count > 0))
+                        ? (capture.recording || (!capture.busy && !root.savingRecording && root.sourceReady))
+                        : (!capture.busy && (capture.running || root.sourceReady))
                     onClicked: {
                         if (root.mode === "record") {
                             if (capture.recording) capture.stop()
-                            else capture.startRecordingDisplay(displayChoice.currentIndex, settings.current)
+                            else root.startRecording()
                         } else if (capture.running) {
                             audience.hide()
                             capture.stop()
                         } else {
                             root.openPresentationWhenReady = true
-                            capture.startDisplay(displayChoice.currentIndex)
+                            root.startPreview()
                         }
                     }
                 }

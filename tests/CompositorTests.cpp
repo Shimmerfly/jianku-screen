@@ -8,6 +8,7 @@
 // but the output is black".
 #include "../src/render/ProjectCompositor.h"
 #include "../src/animation/AnimationSettings.h"
+#include "../src/capture/CaptureSource.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -149,6 +150,54 @@ int main(int argc, char **argv) {
         require(project.cursorObservations.size() == 1, "in-video cursor observations kept");
         require(project.zoomRanges.size() == 1, "zoom range read");
         require(close(project.zoomRanges.front().zoom, 2.0), "zoom level read");
+
+        // The compositor only needs the frame size; pointer events were already
+        // mapped into frame pixels when they were recorded. A window or region
+        // manifest therefore composites without knowing its source kind — but it
+        // does carry extra fields, and those must not upset the loader.
+        {
+            QString manifest = QString::fromUtf8([&] {
+                QFile file(fixture.root + "/project.json");
+                if (!file.open(QIODevice::ReadOnly))
+                    throw std::runtime_error("manifest open");
+                return file.readAll();
+            }());
+            QJsonParseError parseError;
+            const QJsonObject original = QJsonDocument::fromJson(manifest.toUtf8(),
+                &parseError).object();
+            const QJsonObject source = original.value(QStringLiteral("source")).toObject();
+
+            // A region source as MacCapture now writes it: clipped rect, kind and
+            // label included, and a size that is not the display's.
+            QJsonObject regionSource = source;
+            regionSource.insert(QStringLiteral("type"), QStringLiteral("region"));
+            regionSource.insert(QStringLiteral("label"), QStringLiteral("区域"));
+            regionSource.insert(QStringLiteral("regionPoints"), QJsonObject{
+                {QStringLiteral("x"), 400.0}, {QStringLiteral("y"), 200.0},
+                {QStringLiteral("width"), 500.0}, {QStringLiteral("height"), 250.0}});
+            QJsonObject rebuilt = original;
+            rebuilt.insert(QStringLiteral("source"), regionSource);
+            write(fixture.root + "/project.json", QJsonDocument(rebuilt).toJson());
+
+            const ProjectData regionProject = loadProject(fixture.root, &error);
+            require(regionProject.valid, "a region-source manifest loads");
+            require(close(regionProject.sourceSize.width(), 1000.0)
+                    && close(regionProject.sourceSize.height(), 500.0),
+                "the frame size comes from widthPx/heightPx, not the display");
+            require(regionProject.events.size() == project.events.size(),
+                "events are unaffected by the source kind");
+
+            // The manifest itself still round-trips through the shared parser.
+            bool kindOk = false;
+            const Capture::CaptureSource parsed = Capture::CaptureSource::fromJson(regionSource, &kindOk);
+            require(kindOk && parsed.kind == Capture::SourceKind::Region,
+                "the recorded source block is a valid region description");
+            require(parsed.regionPoints == QRectF(400.0, 200.0, 500.0, 250.0),
+                "the recorded region rect matches the frame it was captured with");
+
+            write(fixture.root + "/project.json", QJsonDocument(original).toJson());
+            require(loadProject(fixture.root, &error).valid, "fixture restored");
+        }
 
         // Legacy projects stored `"microphone": true` because an NSDictionary was
         // handed to QJsonObject::insert and silently became a bool. The loader has

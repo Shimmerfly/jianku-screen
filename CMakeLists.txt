@@ -36,6 +36,8 @@ qt_add_executable(jianku-screen MACOSX_BUNDLE
     src/animation/AnimationSettings.h
     src/capture/VideoFrameStore.cpp
     src/capture/VideoFrameStore.h
+    src/capture/CaptureSource.cpp
+    src/capture/CaptureSource.h
     src/settings/SettingsStore.cpp
     src/settings/SettingsStore.h
     src/settings/BackgroundLibrary.cpp
@@ -95,11 +97,15 @@ if(BUILD_TESTING)
     target_link_libraries(canvas-layout-tests PRIVATE Qt6::Core)
     add_test(NAME canvas-layout COMMAND canvas-layout-tests)
 
+    add_executable(capture-source-tests tests/CaptureSourceTests.cpp src/capture/CaptureSource.cpp)
+    target_link_libraries(capture-source-tests PRIVATE Qt6::Core)
+    add_test(NAME capture-source COMMAND capture-source-tests)
+
     add_executable(compositor-tests tests/CompositorTests.cpp
         src/render/ProjectCompositor.cpp src/render/CanvasLayout.cpp
         src/animation/AnimationSettings.cpp src/animation/AutoFocusEngine.cpp
         src/animation/AutomaticZoom.cpp src/animation/CursorEngine.cpp
-        src/animation/SpringSolver.cpp)
+        src/animation/SpringSolver.cpp src/capture/CaptureSource.cpp)
     target_link_libraries(compositor-tests PRIVATE Qt6::Core Qt6::Gui)
     target_compile_definitions(compositor-tests PRIVATE
         JIANKU_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
@@ -151,6 +157,7 @@ set_source_files_properties(ui/SettingsPage.qml PROPERTIES QT_RESOURCE_ALIAS Set
 set_source_files_properties(ui/IconRail.qml PROPERTIES QT_RESOURCE_ALIAS IconRail.qml)
 set_source_files_properties(ui/PreviewCanvas.qml PROPERTIES QT_RESOURCE_ALIAS PreviewCanvas.qml)
 set_source_files_properties(ui/PanelCard.qml PROPERTIES QT_RESOURCE_ALIAS PanelCard.qml)
+set_source_files_properties(ui/RegionSelector.qml PROPERTIES QT_RESOURCE_ALIAS RegionSelector.qml)
 set_source_files_properties(ui/PermissionGuide.qml PROPERTIES QT_RESOURCE_ALIAS PermissionGuide.qml)
 set_source_files_properties(ui/UiButton.qml PROPERTIES QT_RESOURCE_ALIAS UiButton.qml)
 set_source_files_properties(ui/UiField.qml PROPERTIES QT_RESOURCE_ALIAS UiField.qml)
@@ -171,6 +178,7 @@ qt_add_qml_module(jianku-screen
         ui/IconRail.qml
         ui/PreviewCanvas.qml
         ui/PanelCard.qml
+        ui/RegionSelector.qml
         ui/PermissionGuide.qml
         ui/UiButton.qml
         ui/UiField.qml
