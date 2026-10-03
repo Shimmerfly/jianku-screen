@@ -5,7 +5,7 @@
 - 项目根：`/Users/moyingxz/Documents/Zzx/05_项目开发/Jianku Screen`
 - 验证命令：`cd build && cmake --build . -j8 && ctest --output-on-failure`
 - 运行日志：`.dsh/unattended/`
-- 上次更新：2026-10-04 05:05
+- 上次更新：2026-10-04 05:35
 
 ## 授权边界（本次无人值守）
 
@@ -13,15 +13,15 @@
 不做（等用户回来决定）：`git push`、改 CI、装系统级软件、**修改或删除用户的录制素材**。
 额外约束：本仓库为**私有本地仓库**，不做任何远端配置。
 
-## 现状（2026-10-04 05:05）
+## 现状（2026-10-04 05:35）
 
 - 构建：`cmake --build build -j8` 通过，warning 归零。
 - 测试：`ctest` **15/15** 通过（timeline-boundaries、spring-solver、cursor-engine、
   auto-focus、media-clock、canvas-layout、capture-source、motion-blur、compositor、
   export-controller、canvas-renderer、edit-timeline、timeline-controller、
   timeline-geometry、timeline-strip）。
-- 版本历史：基线 `85af2cd`；此后 17 个提交，均在本地。
-- 本轮做了 7 件事，见 Q13–Q19。
+- 版本历史：基线 `85af2cd`；此后 20 个提交，均在本地。
+- 本轮做了 10 件事，见 Q13–Q22。
 - 权限：approval=never / danger-full-access，无人值守期间无审批阻塞。
 - 工作区无其他执行体（Trae 停在 23:38，报的是模型侧 4054，不是代码错误）。
 
@@ -233,6 +233,58 @@ CLI 加 `--cut/--speed/--trim-from/--trim-to`，按固定顺序（先变速、�
 
 验证：`ctest` **15/15**；应用启动无 QML 报错。
 
+### Q20 时间线只能点按钮，不能拖 ✅
+结论：首尾各加一个裁剪把手（拖到哪裁到哪），加 0.5×/1×/2×/4× 变速按钮。
+变速作用于**播放头所在的片段**而不是整条时间线：剪辑后只影响指着的那段，
+旁边的段仍走实时，否则一次变速会静默改动用户没指的内容。
+把手报的是**输出时间**——素材时钟已被前面的剪辑平移过（测试钉住了这一点：
+先裁头 2 秒，再「裁到 7 秒」得到素材 9 秒）。被拒绝的裁剪会明说原因，
+把手拖了没反应又不提示，看起来就是坏的。
+
+**这一轮最值得记的是一个测试局限。** 我原本以为 timeline-strip 能抓住
+「绑定到不存在的属性」，于是故意改坏再跑——**Qt 6.11 对读取不存在的属性
+根本不报警**，只求值成 undefined；只有调用不存在的**函数**并运行到才告警。
+已把这条写进测试文件开头，免得后来的人高估它。
+
+验证：ctest 15/15；另用真实工程把「删除 + 变速」两种剪辑叠加后逐帧核对——
+5 个取样点里有 4 个与参照相符 99.99%、1 个 100%，映射与手推一致
+（证据：`.dsh/unattended/evidence/fragmented-writer.md` 末节）。
+
+### Q21 音量滑块完全不起作用（写了没人读） ✅
+结论：设置页的「麦克风音量」「系统声音音量」与 `audioVolume` /
+`systemAudioVolume` 两个键，**没有任何代码读**——`ComposeOptions` 有字段但始终是
+1.0，拖动滑块对导出零影响。与之前 `cursorSmoothing` 同一类问题。
+改法：在 `makeComposeContext` 里读并夹取到 [0,4]（负音量在 ffmpeg 里是反相
+不是静音，夹取必须），`ComposeOptions` 改成 `-1 = 用工程值`（与 motionBlur 同约定），
+CLI 加 `--system-volume` / `--microphone-volume`。
+实测：麦克风改 0.25 后 mean_volume 从 -60.7 dB 降到 -72.8 dB
+（-12.1 dB ≈ 0.25 倍的 -12.04 dB）。
+
+**另一个查了但决定不接的**：`mouseClickSpring` 同样没人读，但已定位的参考调用链
+写明 zoomer-and-fader 用的是它**自己**的弹簧（300/30/0.3），也就是引擎现在跑的值。
+接上它像「修好一个没接线的设置」，实际与证据矛盾。没改，并加断言把
+「故意忽略」钉住。
+
+验证：ctest 15/15（compositor 新增音量映射与夹取断言）。
+
+### Q22 设置项审计：还有哪些键写了没人读 ✅
+结论：把 72 个设置键逐个搜引用方，结果分三类。
+**只被设置界面引用的 21 个**：`audioVolume`（Q21 已修）、`mouseClickSpring`
+（查证后决定不接）、以及摄像头（`cameraSize`/`cameraRoundness`/
+`cameraScaleDuringZoom`/`cameraAspectRatio`/`hideCamera`/`mirrorCamera`）、
+字幕（`showTranscript`/`transcriptSizeRatio`）、快捷键
+（`showShortcuts`/`showShortcutsWithSingleLetters`/`shortcutsSizeRatio`）、
+背景音乐与点击音（`backgroundAudioVolume`/`muteBackgroundAudio`/
+`clickSoundEffectVolume`）、`playbackSpeed`、`alwaysKeepZoomedIn`、
+`glideSpeed`、`improveMicrophoneAudio`、`muteExternalDeviceAudio`。
+**这 20 个不是 bug，是尚未实现的功能**——摄像头、字幕、快捷键显示、
+背景音乐、点击音效在队列里本来就列为「明确未做」。区别在于：Q21 那种
+「本该生效却写死了」是缺陷，这些是缺失的功能，不该混为一谈。
+**真正的无读取方键只有 3 个**：`cornerSmoothing`、`removeCurshorShakeTreshold`、
+`shadowIsDirectional`、`alwaysUseDefaultCursor`（4 个，其中 `alwaysUseDefaultCursor`
+的含义待查）。这几个都有官方静态值作为默认，属于「已存储、未实现」，
+在队列的「明确未做」里保持诚实标注。
+
 ## 待用户验证（无人值守期间做不了）
 
 按重要性排序。前两项直接影响能不能继续往下做。
@@ -265,7 +317,10 @@ CLI 加 `--cut/--speed/--trim-from/--trim-to`，按固定顺序（先变速、�
 - **崩溃工程的自动修复**：分片写入后视频能读了（Q18），但 `state` 仍是 `failed`，
   且 `video-frames.jsonl` 可能比视频少最多 1 秒。要不要在启动时扫描并修复这类工程
   （自动修 / 提示用户 / 不处理）需要先定行为。
-- 摄像头、字幕、快捷键显示、点击音效、背景音乐。
+- 摄像头、字幕、快捷键显示、点击音效、背景音乐（设置键都已存在，无一接线；
+  见 Q22 的分类）。
+- `cornerSmoothing` / `removeCurshorShakeTreshold` / `shadowIsDirectional` /
+  `alwaysUseDefaultCursor` 四个键已存储但未实现，前三个有官方静态默认值。
 - 演示模式的实时合成输出（当前只对录制工程离线合成）。
 - Windows 侧捕获适配器。
 - 动态模糊的**实时**预览（离线已实现；实时需要另做优化，见 Q12）。
