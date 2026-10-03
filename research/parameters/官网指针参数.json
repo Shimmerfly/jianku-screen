@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "reference": "screen.studio homepage interactive cursor demo",
+  "retrieved_date": "2026-09-30",
+  "evidence_status": "verified_static_official_web_bundle_not_runtime_measurement",
+  "desktop_equivalence": "not_verified",
+  "sources": {
+    "presets": "../evidence/web/9764-19903045e53be0b5.js",
+    "labels": "../evidence/web/1808.2748c8ef4d4c762a.js",
+    "behavior": "../evidence/web/9717.fb42d71fb105f950.js",
+    "style_wrapper": "../evidence/web/1232-4168ed5107832875.js"
+  },
+  "movement_presets": {
+    "Rapid": {
+      "stiffness": 530,
+      "damping": 40,
+      "mass": 1
+    },
+    "Quick": {
+      "stiffness": 340,
+      "damping": 60,
+      "mass": 3
+    },
+    "Default": {
+      "stiffness": 470,
+      "damping": 70,
+      "mass": 3
+    },
+    "Slow": {
+      "stiffness": 170,
+      "damping": 50,
+      "mass": 3
+    }
+  },
+  "selected_initial_preset": "Default",
+  "base_spring": {
+    "precision": 0.002,
+    "clamp": false
+  },
+  "click_and_visibility_spring": {
+    "stiffness": 350,
+    "damping": 40,
+    "mass": 1
+  },
+  "cursor": {
+    "initial_size": 3,
+    "size_and_type_demo_size": 5,
+    "pressed_relative_scale": 0.8,
+    "hidden_relative_scale": 0.6,
+    "auto_hide_demo_delay_ms": 500,
+    "rotation_degrees": "clamp(horizontal_spring_velocity / 240, -20, 20)",
+    "type_transition_ms": 200,
+    "type_transition_bezier": [
+      0.44,
+      0.22,
+      0.26,
+      0.99
+    ]
+  },
+  "demo_only": {
+    "position_offset_css_px": [
+      140,
+      60
+    ],
+    "cycle_type_ms": 1000,
+    "types": [
+      "ibeamstroke",
+      "openhand",
+      "pointinghand",
+      "pointer"
+    ]
+  },
+  "unknown": {
+    "desktop_zoom_in_curve": null,
+    "desktop_zoom_out_curve": null,
+    "desktop_auto_zoom_timing": null,
+    "motion_blur_shutter_or_samples": null
+  },
+  "warning": "Research reference, not a ready-to-use product config. Numeric solver/time behavior and cursor hotspots require matching; demo offsets must not displace real click coordinates."
+}

@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-10-03",
+  "reference": "Screen Studio 3.7.5-4595 official Apple Silicon distribution",
+  "method": "Read-only inspection of hash-verified app.asar entries and Swift Mach-O symbols; no application business functions executed",
+  "offset_definition": "Zero-based UTF-8 byte offset within the original app.asar entry; Mach-O entries use virtual address of the arm64 slice",
+  "entries": [
+    {
+      "path": "dist-electron/index.js",
+      "sha256": "82c9558107908cb8fa6e3f08abf5bf965db487585d8588e9d46dc8958a2c7687",
+      "locators": [
+        {"search_token": "aae={", "offset_bytes": 1131816},
+        {"search_token": "function Hye(", "offset_bytes": 1131851},
+        {"search_token": "function gW(", "offset_bytes": 1132145},
+        {"search_token": "function Qye(", "offset_bytes": 1132478},
+        {"search_token": "function XX(", "offset_bytes": 1133327}
+      ]
+    },
+    {
+      "path": "dist/D4qqfDv_.js",
+      "sha256": "11f9c00d21a02028469a261ed35eaeca2997427d87aadbea96b07d8406d145ca",
+      "locators": [
+        {"search_token": "function wne(", "offset_bytes": 1103325},
+        {"search_token": "function bne(", "offset_bytes": 1104283},
+        {"search_token": "const Sne=", "offset_bytes": 1104394},
+        {"search_token": "class xne", "offset_bytes": 1104560}
+      ]
+    },
+    {
+      "path": "dist/5NxSBPmq.js",
+      "sha256": "e4d1e27f35d85a1e6038f28930655702e46bf7f46919f48346f0a027dd850efd",
+      "locators": [
+        {"search_token": "Yk=", "offset_bytes": 2184964},
+        {"search_token": "Hx=", "offset_bytes": 2185086},
+        {"search_token": "const En=", "offset_bytes": 2185698},
+        {"search_token": "Ok=", "offset_bytes": 2185977},
+        {"search_token": "yl=", "offset_bytes": 2186080},
+        {"search_token": "Yx=", "offset_bytes": 2186111},
+        {"search_token": "function aZ(", "offset_bytes": 2195483},
+        {"search_token": "function hZ(", "offset_bytes": 2196521}
+      ]
+    },
+    {
+      "path": "app.asar.unpacked/bin/prod/polyrecorder-prod",
+      "sha256": "f8e51728c5e3876666211fef4919a8867309e89d35128a24666cd6992b16e426",
+      "arch": "arm64",
+      "symbol_locators": [
+        {"demangled": "polyrecorder.InputEvent.init(event: NSEvent, timeIntervalSinceRecordingEpoch: Double, cursorId: String?)", "virtual_address": "0x1000f4ff8", "selector_refs": {"0x10021b420": "timestamp", "0x10021b448": "CGEvent"}, "call": "CGEventGetLocation at 0x1000f52a8 and 0x1000f52b8"},
+        {"demangled": "polyrecorder.InputRecorder.setup()", "lookup": "nm | swift-demangle"},
+        {"demangled": "polyrecorder.CursorTimeline.observations(after: Double, untilIncluding: Double)", "lookup": "nm | swift-demangle"},
+        {"demangled": "polyrecorder.CursorRecorder.createDisplayLinkHandler(errorRateLimit: Double)", "lookup": "nm | swift-demangle"},
+        {"demangled": "polyrecorder.CGEventTapAction.init(eventMask: UInt64, callback: (CGEventRef) -> ())", "lookup": "nm | swift-demangle"}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+.DS_Store
+build/
+cmake-build-*/
+*.app/
+CMakeFiles/
+
+# Large reference artifacts: keep the research notes, drop the raw snapshots.
+*.dmg
+research/evidence/app/
+research/evidence/web/
+research/evidence/screen-studio-home.html
+research/evidence/2026-09-30-round2/
+*.mp4
+*.m4a

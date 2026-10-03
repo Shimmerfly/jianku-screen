@@ -1,0 +1,1013 @@
+#import "MacCapture.h"
+#import "MicrophoneRecorder.h"
+#import "PointerEventRecorder.h"
+#import "../capture/VideoFrameStore.h"
+#include "../project/ProjectTimeline.h"
+
+#import <CoreGraphics/CoreGraphics.h>
+#import <CoreMedia/CoreMedia.h>
+#import <AVFoundation/AVFoundation.h>
+#import <ScreenCaptureKit/ScreenCaptureKit.h>
+#import <AppKit/AppKit.h>
+
+#include <QDateTime>
+#include <QDir>
+#include <QDesktopServices>
+#include <QDrag>
+#include <QGuiApplication>
+#include <QMimeData>
+#include <QProcess>
+#include <QWindow>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QSaveFile>
+#include <QUrl>
+#include <QMetaObject>
+#include <QSize>
+#include <QStandardPaths>
+#include <QThreadPool>
+#include <algorithm>
+#include <functional>
+#include <mutex>
+#include <utility>
+
+namespace {
+struct CallbackGate {
+    std::mutex mutex;
+    MacCapture *owner = nullptr;
+};
+
+void postToOwner(const std::shared_ptr<CallbackGate> &gate,
+                 std::function<void(MacCapture *)> action) {
+    std::lock_guard lock(gate->mutex);
+    if (MacCapture *owner = gate->owner) {
+        QMetaObject::invokeMethod(owner,
+            [owner, action = std::move(action)] { action(owner); },
+            Qt::QueuedConnection);
+    }
+}
+
+QString errorText(NSError *error) {
+    if (!error)
+        return QStringLiteral("未知屏幕采集错误");
+    return QString::fromNSString(error.localizedDescription);
+}
+
+QSize displayPixelSize(SCDisplay *display) {
+    CGDisplayModeRef mode = CGDisplayCopyDisplayMode(display.displayID);
+    if (!mode)
+        return QSize(static_cast<int>(display.width), static_cast<int>(display.height));
+    const QSize result(static_cast<int>(CGDisplayModeGetPixelWidth(mode)),
+                       static_cast<int>(CGDisplayModeGetPixelHeight(mode)));
+    CGDisplayModeRelease(mode);
+    return result;
+}
+
+qint64 timeNs(CMTime time) {
+    return CMTimeConvertScale(time, 1000000000, kCMTimeRoundingMethod_RoundHalfAwayFromZero).value;
+}
+
+bool writeProject(const QString &directory, const QJsonObject &manifest) {
+    QSaveFile file(directory + QStringLiteral("/project.json"));
+    const auto bytes = QJsonDocument(manifest).toJson();
+    return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size() && file.commit();
+}
+} // namespace
+
+@interface JiankuStreamReceiver : NSObject <SCStreamOutput, SCStreamDelegate> {
+@public
+    std::shared_ptr<VideoFrameStore> frameStore;
+    std::shared_ptr<CallbackGate> callbackGate;
+    dispatch_queue_t sampleQueue;
+    AVAssetWriter *writer;
+    AVAssetWriterInput *videoInput;
+    AVAssetWriterInputPixelBufferAdaptor *videoAdaptor;
+    AVAssetWriterInput *audioInput;
+    BOOL audioMuted;
+    NSURL *recordingURL;
+    CMTime firstFrameTime;
+    BOOL writerStarted;
+    BOOL recordingActive;
+    BOOL paused;
+    // Total paused duration folded out of the media timeline. Every frame and
+    // audio buffer is shifted left by this so a pause leaves no gap in the file.
+    qint64 pausedAccumNs;
+    qint64 pauseStartHostNs;
+    CMTime lastFrameTime;
+    qint64 firstDisplayHostNs;
+    qint64 lastDisplayHostNs;
+    qint64 frameCount;
+    qint64 droppedFrameCount;
+    CVPixelBufferRef lastRecordedFrame;
+    std::unique_ptr<QFile> frameTimeline;
+    bool timelineHealthy;
+    NSMutableArray<NSDictionary *> *pauseRanges;
+    std::function<void(QString, QString, QJsonObject)> recordingFinished;
+}
+- (BOOL)beginRecordingAtURL:(NSURL *)url size:(QSize)size error:(NSError **)error;
+- (void)endRecording;
+- (void)pauseRecording;
+- (void)resumeRecording;
+- (CMTime)mediaTimeForSourceTime:(CMTime)sourceTime;
+- (QJsonObject)recordingMetadata;
+@end
+
+@implementation JiankuStreamReceiver
+- (BOOL)beginRecordingAtURL:(NSURL *)url size:(QSize)size error:(NSError **)error {
+    AVAssetWriter *newWriter = [[AVAssetWriter alloc] initWithURL:url
+        fileType:AVFileTypeMPEG4 error:error];
+    if (!newWriter)
+        return NO;
+    const int pixels = size.width() * size.height();
+    NSDictionary *compression = @{
+        AVVideoAverageBitRateKey: @(std::clamp(pixels * 6, 12000000, 36000000)),
+        AVVideoExpectedSourceFrameRateKey: @60,
+        AVVideoMaxKeyFrameIntervalKey: @120
+    };
+    NSDictionary *settings = @{
+        AVVideoCodecKey: AVVideoCodecTypeH264,
+        AVVideoWidthKey: @(size.width()),
+        AVVideoHeightKey: @(size.height()),
+        AVVideoCompressionPropertiesKey: compression
+    };
+    AVAssetWriterInput *input = [[AVAssetWriterInput alloc]
+        initWithMediaType:AVMediaTypeVideo outputSettings:settings];
+    input.expectsMediaDataInRealTime = YES;
+    if (![newWriter canAddInput:input]) {
+        if (error)
+            *error = [NSError errorWithDomain:@"JiankuScreen" code:1
+                userInfo:@{NSLocalizedDescriptionKey: @"当前尺寸无法创建视频轨道"}];
+        return NO;
+    }
+    [newWriter addInput:input];
+    if (!audioMuted) {
+        // System audio is muxed into the recording as a second (AAC) track.
+        NSDictionary *audioSettings = @{
+            AVFormatIDKey: @(kAudioFormatMPEG4AAC),
+            AVSampleRateKey: @48000.0,
+            AVNumberOfChannelsKey: @2,
+            AVEncoderBitRateKey: @(128000)
+        };
+        AVAssetWriterInput *newAudioInput = [[AVAssetWriterInput alloc]
+            initWithMediaType:AVMediaTypeAudio outputSettings:audioSettings];
+        newAudioInput.expectsMediaDataInRealTime = YES;
+        if ([newWriter canAddInput:newAudioInput]) {
+            [newWriter addInput:newAudioInput];
+            audioInput = newAudioInput;
+        } else {
+            audioInput = nil;
+        }
+    } else {
+        audioInput = nil;
+    }
+    NSDictionary *attributes = @{
+        (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+        (id)kCVPixelBufferWidthKey: @(size.width()),
+        (id)kCVPixelBufferHeightKey: @(size.height())
+    };
+    AVAssetWriterInputPixelBufferAdaptor *adaptor =
+        [[AVAssetWriterInputPixelBufferAdaptor alloc]
+            initWithAssetWriterInput:input sourcePixelBufferAttributes:attributes];
+    dispatch_sync(sampleQueue, ^{
+        frameTimeline = std::make_unique<QFile>(QFileInfo(QString::fromNSString(url.path)).path()
+            + QStringLiteral("/video-frames.jsonl"));
+        if (!frameTimeline->open(QIODevice::WriteOnly)) return;
+        writer = newWriter;
+        videoInput = input;
+        videoAdaptor = adaptor;
+        recordingURL = url;
+        writerStarted = NO;
+        recordingActive = YES;
+        paused = NO;
+        pausedAccumNs = 0;
+        pauseStartHostNs = 0;
+        firstFrameTime = kCMTimeInvalid;
+        lastFrameTime = kCMTimeInvalid;
+        firstDisplayHostNs = lastDisplayHostNs = 0;
+        frameCount = droppedFrameCount = 0;
+        timelineHealthy = true;
+        lastRecordedFrame = nullptr;
+        pauseRanges = [NSMutableArray array];
+    });
+    if (!recordingActive && error)
+        *error = [NSError errorWithDomain:@"JiankuScreen" code:2
+            userInfo:@{NSLocalizedDescriptionKey: @"无法创建视频帧时间记录"}];
+    return recordingActive;
+}
+
+- (CMTime)mediaTimeForSourceTime:(CMTime)sourceTime {
+    // Fold every completed pause out of the media timeline so the exported file
+    // has no gap where the recording was suspended.
+    return CMTimeSubtract(CMTimeSubtract(sourceTime, firstFrameTime),
+        CMTimeMake(pausedAccumNs, 1000000000));
+}
+
+- (void)pauseRecording {
+    dispatch_async(sampleQueue, ^{
+        if (!recordingActive || paused || !writerStarted)
+            return;
+        paused = YES;
+        pauseStartHostNs = timeNs(CMClockGetTime(CMClockGetHostTimeClock()));
+        [pauseRanges addObject:[NSMutableDictionary dictionaryWithObjectsAndKeys:
+            QString::number(pauseStartHostNs).toNSString(), @"startHostTimeNs", nil]];
+    });
+}
+
+- (void)resumeRecording {
+    dispatch_async(sampleQueue, ^{
+        if (!recordingActive || !paused)
+            return;
+        const qint64 now = timeNs(CMClockGetTime(CMClockGetHostTimeClock()));
+        const qint64 duration = std::max<qint64>(0, now - pauseStartHostNs);
+        pausedAccumNs += duration;
+        NSMutableDictionary *last = [pauseRanges lastObject];
+        last[@"endHostTimeNs"] = QString::number(now).toNSString();
+        last[@"durationNs"] = QString::number(duration).toNSString();
+        paused = NO;
+    });
+}
+
+- (QJsonObject)recordingMetadata {
+    QJsonArray pauses;
+    for (NSDictionary *range in pauseRanges) {
+        NSString *start = range[@"startHostTimeNs"];
+        NSString *end = range[@"endHostTimeNs"];
+        NSString *duration = range[@"durationNs"];
+        pauses.append(QJsonObject{
+            {"startHostTimeNs", start ? QString::fromNSString(start) : QString()},
+            {"endHostTimeNs", end ? QString::fromNSString(end) : QString()},
+            {"durationNs", duration ? QString::fromNSString(duration) : QString()}});
+    }
+    const CMTime mediaEnd = CMTIME_IS_VALID(lastFrameTime)
+        ? [self mediaTimeForSourceTime:lastFrameTime] : kCMTimeInvalid;
+    const CMTime mediaFirst = CMTIME_IS_VALID(firstFrameTime)
+        ? [self mediaTimeForSourceTime:firstFrameTime] : kCMTimeInvalid;
+    return {{"file", "raw.mp4"}, {"frames", "video-frames.jsonl"}, {"cursorBakedIn", false},
+        {"firstSourcePtsNs", CMTIME_IS_VALID(firstFrameTime) ? QString::number(timeNs(firstFrameTime)) : QString()},
+        {"mediaZeroHostTimeNs", QString::number(firstDisplayHostNs)},
+        {"lastDisplayHostTimeNs", QString::number(lastDisplayHostNs)},
+        {"durationNs", CMTIME_IS_VALID(mediaEnd)
+            ? QString::number(timeNs(CMTimeSubtract(mediaEnd, mediaFirst)) + 16666667) : QString()},
+        {"frameCount", frameCount}, {"droppedFrameCount", droppedFrameCount},
+        {"pauseRanges", pauses}, {"pausedTotalNs", QString::number(pausedAccumNs)},
+        {"timelineWriteError", !timelineHealthy ? QStringLiteral("视频帧时间记录写入失败") : QString()}};
+}
+
+- (void)endRecording {
+    dispatch_async(sampleQueue, ^{
+        if (!recordingActive)
+            return;
+        recordingActive = NO;
+        if (!writerStarted) {
+            [writer cancelWriting];
+            [[NSFileManager defaultManager] removeItemAtURL:recordingURL error:nil];
+            if (frameTimeline) frameTimeline->close();
+            recordingFinished({}, QStringLiteral("未收到可写入的视频帧"), [self recordingMetadata]);
+            writer = nil;
+            videoInput = nil;
+            videoAdaptor = nil;
+            audioInput = nil;
+            recordingURL = nil;
+            return;
+        }
+        // Extend a static source to the actual stop time without inventing motion.
+        const qint64 stopHostNs = timeNs(CMClockGetTime(CMClockGetHostTimeClock()));
+        if (paused) {
+            // Stopping while paused: the frozen interval is not part of the video.
+            const qint64 duration = std::max<qint64>(0, stopHostNs - pauseStartHostNs);
+            pausedAccumNs += duration;
+            NSMutableDictionary *last = [pauseRanges lastObject];
+            last[@"endHostTimeNs"] = QString::number(stopHostNs).toNSString();
+            last[@"durationNs"] = QString::number(duration).toNSString();
+            paused = NO;
+        }
+        const CMTime lastMediaTime = [self mediaTimeForSourceTime:lastFrameTime];
+        const qint64 liveNs = std::max<qint64>(0, stopHostNs - lastDisplayHostNs);
+        const CMTime endTime = CMTimeAdd(lastMediaTime, CMTimeMake(liveNs, 1000000000));
+        const CMTime finalFrameTime = CMTimeSubtract(endTime, CMTimeMake(1, 60));
+        if (lastRecordedFrame && videoInput.readyForMoreMediaData
+            && CMTimeCompare(finalFrameTime, lastMediaTime) > 0
+            && [videoAdaptor appendPixelBuffer:lastRecordedFrame
+                withPresentationTime:finalFrameTime]) {
+            ++frameCount;
+            const auto line = QJsonDocument(QJsonObject{{"mediaTimeNs", QString::number(timeNs(finalFrameTime))},
+                {"displayHostTimeNs", QString::number(stopHostNs - 16666667)}, {"repeatedAtStop", true}}).toJson(QJsonDocument::Compact) + '\n';
+            timelineHealthy &= frameTimeline->write(line) == line.size();
+        }
+        if (lastRecordedFrame) { CVPixelBufferRelease(lastRecordedFrame); lastRecordedFrame = nullptr; }
+        const bool flushed = frameTimeline->flush() && timelineHealthy;
+        const QJsonObject metadata = [self recordingMetadata];
+        frameTimeline->close();
+        [videoInput markAsFinished];
+        if (audioInput) [audioInput markAsFinished];
+        AVAssetWriter *finishingWriter = writer;
+        NSURL *finishedURL = recordingURL;
+        auto completion = recordingFinished;
+        writer = nil;
+        videoInput = nil;
+        videoAdaptor = nil;
+        audioInput = nil;
+        recordingURL = nil;
+        [finishingWriter finishWritingWithCompletionHandler:^{
+            if (finishingWriter.status == AVAssetWriterStatusCompleted && flushed) {
+                completion(QString::fromNSString(finishedURL.path), {}, metadata);
+            } else {
+                const QString failure = flushed ? errorText(finishingWriter.error)
+                    : QStringLiteral("视频帧时间记录保存失败");
+                completion({}, failure, metadata);
+            }
+        }];
+    });
+}
+
+- (void)handleAudioSampleBuffer:(CMSampleBufferRef)sampleBuffer {
+    if (!recordingActive || !audioInput || !writerStarted || paused)
+        return;
+    if (!CMSampleBufferIsValid(sampleBuffer))
+        return;
+    if (!CMTIME_IS_VALID(firstFrameTime))
+        return;
+    // Align audio with the video timeline (both use the SCK host clock) and fold
+    // any completed pause out so audio and video stay in sync afterwards.
+    const CMTime pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+    const CMTime relative = [self mediaTimeForSourceTime:pts];
+    if (CMTimeCompare(relative, kCMTimeZero) < 0)
+        return;
+    if (![audioInput isReadyForMoreMediaData])
+        return;
+    CMSampleBufferRef adjusted = nullptr;
+    CMSampleTimingInfo timing;
+    timing.duration = CMSampleBufferGetDuration(sampleBuffer);
+    if (!CMTIME_IS_VALID(timing.duration))
+        timing.duration = CMTimeMake(1, 48000);
+    timing.presentationTimeStamp = relative;
+    timing.decodeTimeStamp = kCMTimeInvalid;
+    // Exactly one timing entry, applied to every sample in the buffer. Passing
+    // the sample count here would read past the single-element struct.
+    if (CMSampleBufferCreateCopyWithNewTiming(kCFAllocatorDefault, sampleBuffer,
+            1, &timing, &adjusted) != noErr)
+        return;
+    [audioInput appendSampleBuffer:adjusted];
+    CFRelease(adjusted);
+}
+
+- (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
+         ofType:(SCStreamOutputType)type {
+    (void)stream;
+    if (type == SCStreamOutputTypeAudio) {
+        // Audio shares the serial writer queue, keeping writer/input state and
+        // the first-frame anchor single-threaded.
+        return [self handleAudioSampleBuffer:sampleBuffer];
+    }
+    if (type != SCStreamOutputTypeScreen || !CMSampleBufferIsValid(sampleBuffer))
+        return;
+
+    CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, false);
+    if (!attachments || CFArrayGetCount(attachments) == 0)
+        return;
+    NSDictionary *frameInfo = (__bridge NSDictionary *)CFArrayGetValueAtIndex(attachments, 0);
+    if ([frameInfo[SCStreamFrameInfoStatus] integerValue] != SCFrameStatusComplete)
+        return;
+
+    CVPixelBufferRef frame = CMSampleBufferGetImageBuffer(sampleBuffer);
+    if (frame)
+        frameStore->publish(frame);
+    if (frame && recordingActive) {
+        const CMTime timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+        if (!CMTIME_IS_VALID(timestamp))
+            return;
+        if (!writerStarted) {
+            if (![writer startWriting]) {
+                recordingActive = NO;
+                const QString failure = errorText(writer.error);
+                [writer cancelWriting];
+                [[NSFileManager defaultManager] removeItemAtURL:recordingURL error:nil];
+                if (frameTimeline) frameTimeline->close();
+                recordingFinished({}, failure, [self recordingMetadata]);
+                return;
+            }
+            [writer startSessionAtSourceTime:kCMTimeZero];
+            firstFrameTime = timestamp;
+            writerStarted = YES;
+        }
+        const NSNumber *displayTime = frameInfo[SCStreamFrameInfoDisplayTime];
+        const qint64 receiveNs = timeNs(CMClockGetTime(CMClockGetHostTimeClock()));
+        const qint64 displayNs = displayTime ? timeNs(CMClockMakeHostTimeFromSystemUnits(displayTime.unsignedLongLongValue)) : receiveNs;
+        // While paused the source keeps delivering frames; they are dropped so
+        // the pause leaves no silent interval in the file.
+        if (paused) {
+            ++droppedFrameCount;
+            return;
+        }
+        if (videoInput.readyForMoreMediaData) {
+            if (frameCount == 0) firstFrameTime = timestamp;
+            const CMTime relativeTime = [self mediaTimeForSourceTime:timestamp];
+            if (CMTIME_IS_VALID(lastFrameTime) && CMTimeCompare(timestamp, lastFrameTime) <= 0) {
+                ++droppedFrameCount;
+                return;
+            }
+            if (CMTimeCompare(relativeTime, kCMTimeZero) >= 0 &&
+                ![videoAdaptor appendPixelBuffer:frame withPresentationTime:relativeTime]) {
+                recordingActive = NO;
+                const QString failure = errorText(writer.error);
+                [videoInput markAsFinished];
+                AVAssetWriter *failedWriter = writer;
+                NSURL *failedURL = recordingURL;
+                auto completion = recordingFinished;
+                const QJsonObject metadata = [self recordingMetadata];
+                if (frameTimeline) frameTimeline->close();
+                if (lastRecordedFrame) { CVPixelBufferRelease(lastRecordedFrame); lastRecordedFrame = nullptr; }
+                [failedWriter finishWritingWithCompletionHandler:^{
+                    Q_UNUSED(failedURL);
+                    completion({}, failure, metadata);
+                }];
+                return;
+            }
+            if (CMTimeCompare(relativeTime, kCMTimeZero) >= 0) {
+                if (!firstDisplayHostNs) firstDisplayHostNs = displayNs;
+                lastFrameTime = timestamp;
+                lastDisplayHostNs = displayNs;
+                ++frameCount;
+                if (lastRecordedFrame) CVPixelBufferRelease(lastRecordedFrame);
+                lastRecordedFrame = CVPixelBufferRetain(frame);
+                const auto line = QJsonDocument(QJsonObject{{"mediaTimeNs", QString::number(timeNs(relativeTime))},
+                    {"sourcePtsNs", QString::number(timeNs(timestamp))}, {"displayHostTimeNs", QString::number(displayNs)},
+                    {"receivedHostTimeNs", QString::number(receiveNs)}, {"displayTimeAvailable", displayTime != nil}}).toJson(QJsonDocument::Compact) + '\n';
+                timelineHealthy &= frameTimeline->write(line) == line.size();
+            }
+        } else {
+            ++droppedFrameCount;
+        }
+    }
+}
+
+- (void)stream:(SCStream *)stream didStopWithError:(NSError *)error {
+    (void)stream;
+    const QString message = errorText(error);
+    postToOwner(callbackGate, [message](MacCapture *owner) {
+        owner->stop();
+        Q_UNUSED(message);
+    });
+}
+@end
+
+struct MacCapture::Impl {
+    explicit Impl(MacCapture *owner) : gate(std::make_shared<CallbackGate>()) {
+        gate->owner = owner;
+    }
+
+    std::shared_ptr<CallbackGate> gate;
+    MicrophoneRecorder *micRecorder = nil;
+    NSArray<SCDisplay *> *displays = nil;
+    NSArray<SCRunningApplication *> *applications = nil;
+    SCStream *stream = nil;
+    JiankuStreamReceiver *receiver = nil;
+    SCStreamConfiguration *configuration = nil;
+    PointerEventRecorder pointerRecorder;
+    QString projectDirectory;
+    QJsonObject projectManifest;
+    std::uint64_t generation = 0;
+};
+
+MacCapture::MacCapture(QObject *parent)
+    : QObject(parent), impl_(std::make_unique<Impl>(this)),
+      frameStore_(std::make_shared<VideoFrameStore>()) {}
+
+MacCapture::~MacCapture() {
+    if (impl_->pointerRecorder.active()) {
+        impl_->projectManifest.insert("pointer", impl_->pointerRecorder.stop());
+        impl_->projectManifest.insert("state", "interrupted");
+        writeProject(impl_->projectDirectory, impl_->projectManifest);
+    }
+    if (recording_ && impl_->receiver)
+        [impl_->receiver endRecording];
+    if (impl_->micRecorder) {
+        [impl_->micRecorder stop];
+        impl_->micRecorder = nil;
+    }
+    {
+        std::lock_guard lock(impl_->gate->mutex);
+        impl_->gate->owner = nullptr;
+    }
+    if (impl_->stream)
+        [impl_->stream stopCaptureWithCompletionHandler:nil];
+}
+
+QObject *MacCapture::frameStore() const { return frameStore_.get(); }
+
+bool MacCapture::screenAuthorized() const {
+    // Preflight is unreliable for ad-hoc signed builds, so a successful capture
+    // probe (SCShareableContent) also counts as authorised.
+    return captureProbeOk_ || CGPreflightScreenCaptureAccess();
+}
+
+void MacCapture::refreshScreenAuthorization() {
+    emit screenAuthorizedChanged();
+}
+
+bool MacCapture::requestScreenAuthorization() {
+    const bool granted = CGRequestScreenCaptureAccess();
+    emit screenAuthorizedChanged();
+    return granted;
+}
+
+void MacCapture::openScreenRecordingSettings() {
+    NSURL *url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"];
+    [[NSWorkspace sharedWorkspace] openURL:url];
+}
+
+void MacCapture::openInputMonitoringSettings() {
+    NSURL *url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"];
+    [[NSWorkspace sharedWorkspace] openURL:url];
+}
+
+void MacCapture::openMicrophoneSettings() {
+    NSURL *url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"];
+    [[NSWorkspace sharedWorkspace] openURL:url];
+}
+
+bool MacCapture::requestInputMonitoringAccess() {
+    // Shows the system prompt on first call; afterwards it only reports state.
+    return CGRequestListenEventAccess() || CGPreflightListenEventAccess();
+}
+
+void MacCapture::revealAppInFinder() {
+    NSURL *url = [NSURL fileURLWithPath:NSBundle.mainBundle.bundlePath];
+    [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[ url ]];
+}
+
+QString MacCapture::appBundlePath() const {
+    return QString::fromNSString(NSBundle.mainBundle.bundlePath);
+}
+
+QString MacCapture::appFileUrl() const {
+    return QUrl::fromLocalFile(appBundlePath()).toString();
+}
+
+void MacCapture::beginAppDrag() {
+    auto *mime = new QMimeData;
+    mime->setUrls({ QUrl::fromLocalFile(appBundlePath()) });
+    QWindow *window = QGuiApplication::focusWindow();
+    auto *drag = new QDrag(window ? static_cast<QObject *>(window) : this);
+    drag->setMimeData(mime);
+    drag->exec(Qt::CopyAction);
+}
+
+void MacCapture::resetScreenPermission() {
+    const QString bundleId = NSBundle.mainBundle.bundleIdentifier
+        ? QString::fromNSString(NSBundle.mainBundle.bundleIdentifier)
+        : QStringLiteral("com.jianku.screen");
+    QProcess::execute(QStringLiteral("/usr/bin/tccutil"),
+        { QStringLiteral("reset"), QStringLiteral("ScreenCapture"), bundleId });
+    requestScreenAuthorization();
+    emit screenAuthorizedChanged();
+}
+
+void MacCapture::relaunch() {
+    QProcess::startDetached(QCoreApplication::applicationFilePath(), {});
+    QCoreApplication::quit();
+}
+
+void MacCapture::setStatus(const QString &value) {
+    if (status_ == value)
+        return;
+    status_ = value;
+    emit statusChanged();
+}
+
+void MacCapture::setPermissionIssue(const QString &kind, const QString &message) {
+    if (permissionIssue_ == message && permissionIssueKind_ == kind)
+        return;
+    permissionIssueKind_ = kind;
+    permissionIssue_ = message;
+    emit permissionIssueChanged();
+}
+
+void MacCapture::setRunning(bool value) {
+    if (running_ == value)
+        return;
+    running_ = value;
+    emit runningChanged();
+}
+
+void MacCapture::setBusy(bool value) {
+    if (busy_ == value)
+        return;
+    busy_ = value;
+    emit busyChanged();
+}
+
+void MacCapture::setRecording(bool value) {
+    if (recording_ == value)
+        return;
+    recording_ = value;
+    emit recordingChanged();
+}
+
+void MacCapture::setRecordingPaused(bool value) {
+    if (recordingPaused_ == value)
+        return;
+    recordingPaused_ = value;
+    emit recordingPausedChanged();
+}
+
+void MacCapture::setRecordingStatus(const QString &value) {
+    if (recordingStatus_ == value)
+        return;
+    recordingStatus_ = value;
+    emit recordingStatusChanged();
+}
+
+void MacCapture::setLastRecordingPath(const QString &value) {
+    if (lastRecordingPath_ == value)
+        return;
+    lastRecordingPath_ = value;
+    emit lastRecordingPathChanged();
+}
+
+void MacCapture::reportError(const QString &value) {
+    recordWhenReady_ = false;
+    setBusy(false);
+    setRunning(false);
+    setStatus(QStringLiteral("屏幕采集失败：") + value);
+}
+
+void MacCapture::refreshDisplays() {
+    if (busy_ || running_)
+        return;
+    setBusy(true);
+    setStatus(QStringLiteral("正在读取可录制的显示器…"));
+    auto gate = impl_->gate;
+    [SCShareableContent getShareableContentExcludingDesktopWindows:NO
+        onScreenWindowsOnly:NO
+        completionHandler:^(SCShareableContent *content, NSError *error) {
+            const QString failure = errorText(error);
+            postToOwner(gate, [content, error, failure](MacCapture *owner) {
+                if (error || !content) {
+                    owner->captureProbeOk_ = false;
+                    emit owner->screenAuthorizedChanged();
+                    emit owner->captureAccessDenied();
+                    owner->setPermissionIssue(QStringLiteral("screen"), failure);
+                    owner->reportError(failure);
+                    return;
+                }
+                owner->captureProbeOk_ = true;
+                emit owner->screenAuthorizedChanged();
+                owner->setPermissionIssue({}, {});
+                owner->impl_->displays = content.displays;
+                owner->impl_->applications = content.applications;
+                QStringList names;
+                for (SCDisplay *display in content.displays) {
+                    const QSize pixels = displayPixelSize(display);
+                    names << QStringLiteral("显示器 %1 · %2 × %3")
+                                 .arg(display.displayID).arg(pixels.width()).arg(pixels.height());
+                }
+                owner->displayNames_ = names;
+                emit owner->displayNamesChanged();
+                owner->setBusy(false);
+                owner->setStatus(names.isEmpty()
+                    ? QStringLiteral("没有可用显示器。请检查屏幕录制权限。")
+                    : QStringLiteral("选择显示器后开始预览。"));
+            });
+        }];
+}
+
+void MacCapture::startDisplay(int index) {
+    if (busy_ || running_)
+        return;
+    if (index < 0 || index >= static_cast<int>(impl_->displays.count)) {
+        reportError(QStringLiteral("显示器选择无效"));
+        return;
+    }
+    setBusy(true);
+    stopRequested_ = false;
+    activeDisplayIndex_ = index;
+    setStatus(QStringLiteral("正在启动屏幕采集…"));
+    SCDisplay *display = impl_->displays[index];
+    NSString *bundleId = NSBundle.mainBundle.bundleIdentifier;
+    NSMutableArray<SCRunningApplication *> *excluded = [NSMutableArray array];
+    for (SCRunningApplication *app in impl_->applications) {
+        if ([app.bundleIdentifier isEqualToString:bundleId])
+            [excluded addObject:app];
+    }
+    SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:display
+        excludingApplications:excluded exceptingWindows:@[]];
+    SCStreamConfiguration *config = [[SCStreamConfiguration alloc] init];
+    const QSize pixels = displayPixelSize(display);
+    config.width = pixels.width();
+    config.height = pixels.height();
+    config.pixelFormat = kCVPixelFormatType_32BGRA;
+    config.minimumFrameInterval = CMTimeMake(1, 60);
+    config.queueDepth = 3;
+    // Never capture the system cursor: the animation engine composites its own
+    // smoothed pointer, otherwise two cursors would be visible.
+    config.showsCursor = NO;
+    // System audio is always captured; it only enters the file when recording.
+    config.capturesAudio = YES;
+    config.excludesCurrentProcessAudio = YES;
+
+    JiankuStreamReceiver *receiver = [[JiankuStreamReceiver alloc] init];
+    receiver->frameStore = frameStore_;
+    receiver->callbackGate = impl_->gate;
+    receiver->audioMuted = recordingSettings_.value("muteSystemAudio").toBool();
+    SCStream *stream = [[SCStream alloc] initWithFilter:filter
+        configuration:config delegate:receiver];
+    NSError *error = nil;
+    dispatch_queue_t sampleQueue = dispatch_queue_create(
+        "com.jianku.screen.capture-frames", DISPATCH_QUEUE_SERIAL);
+    receiver->sampleQueue = sampleQueue;
+    if (![stream addStreamOutput:receiver type:SCStreamOutputTypeScreen
+              sampleHandlerQueue:sampleQueue error:&error]) {
+        reportError(errorText(error));
+        return;
+    }
+    // System audio shares the receiver; handleAudioSampleBuffer drops samples
+    // when the writer has no audio track (muted) or recording has not started.
+    if (!recordingSettings_.value("muteSystemAudio").toBool()) {
+        NSError *audioError = nil;
+        if (![stream addStreamOutput:receiver type:SCStreamOutputTypeAudio
+                  sampleHandlerQueue:sampleQueue error:&audioError]) {
+            const QString failure = QStringLiteral("系统声音输出未接通，请检查屏幕录制权限：") + errorText(audioError);
+            setPermissionIssue(QStringLiteral("screen"), failure);
+            reportError(failure);
+            return;
+        }
+    }
+    impl_->receiver = receiver;
+    impl_->stream = stream;
+    impl_->configuration = config;
+    const std::uint64_t generation = ++impl_->generation;
+    auto gate = impl_->gate;
+    [stream startCaptureWithCompletionHandler:^(NSError *startError) {
+        const QString failure = errorText(startError);
+        postToOwner(gate, [generation, startError, failure](MacCapture *owner) {
+            if (generation != owner->impl_->generation)
+                return;
+            if (startError) {
+                owner->impl_->stream = nil;
+                owner->impl_->receiver = nil;
+                owner->reportError(failure);
+                return;
+            }
+            owner->setBusy(false);
+            owner->setRunning(true);
+            owner->setStatus(QStringLiteral("屏幕画面正在输出。"));
+            if (owner->recordWhenReady_) {
+                owner->recordWhenReady_ = false;
+                owner->startRecording();
+            }
+            if (owner->stopRequested_)
+                owner->stop();
+        });
+    }];
+}
+
+void MacCapture::startRecordingDisplay(int index, const QVariantMap &settings) {
+    if (recording_ || recordingFinalizing_ || busy_)
+        return;
+    recordingSettings_ = settings;
+    if (running_) {
+        startRecording();
+        return;
+    }
+    recordWhenReady_ = true;
+    startDisplay(index);
+}
+
+void MacCapture::startRecording() {
+    if (!running_ || !impl_->receiver || recording_ || recordingFinalizing_)
+        return;
+    if (impl_->configuration.showsCursor) {
+        setBusy(true);
+        impl_->configuration.showsCursor = NO;
+        const auto generation = impl_->generation;
+        auto gate = impl_->gate;
+        [impl_->stream updateConfiguration:impl_->configuration completionHandler:^(NSError *error) {
+            const QString failure = errorText(error);
+            postToOwner(gate, [generation, error, failure](MacCapture *owner) {
+                if (generation != owner->impl_->generation) return;
+                owner->setBusy(false);
+                if (error) {
+                    owner->setRecordingStatus(QStringLiteral("无法准备无光标录制：") + failure);
+                    owner->stop();
+                } else owner->startRecording();
+            });
+        }];
+        return;
+    }
+    QString directory = recordingSettings_.value("recordingDirectory").toString();
+    if (directory.isEmpty())
+        directory = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation)
+            + QStringLiteral("/Jianku Screen");
+    if (!QDir().mkpath(directory)) {
+        setRecordingStatus(QStringLiteral("无法创建录像保存目录：") + directory);
+        return;
+    }
+    const QString projectDirectory = directory + QStringLiteral("/Jianku Screen ")
+        + QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH-mm-ss-zzz"))
+        + QStringLiteral(".jianku");
+    if (!QDir().mkpath(projectDirectory)) {
+        setRecordingStatus(QStringLiteral("无法创建录制工程目录"));
+        stop();
+        return;
+    }
+    const QString path = projectDirectory + QStringLiteral("/raw.mp4");
+    SCDisplay *display = activeDisplayIndex_ >= 0 && activeDisplayIndex_ < impl_->displays.count
+        ? impl_->displays[activeDisplayIndex_] : nil;
+    if (!display) {
+        setRecordingStatus(QStringLiteral("没有可用的录制来源"));
+        return;
+    }
+    impl_->projectDirectory = projectDirectory;
+    const CGRect bounds = CGDisplayBounds(display.displayID);
+    const QSize pixels = displayPixelSize(display);
+    impl_->projectManifest = {{"schemaVersion", 1}, {"application", "Jianku Screen"},
+        {"animationModelVersion", "desktop-3.7.5-research-v1"}, {"state", "preparing"},
+        {"createdAt", QDateTime::currentDateTime().toString(Qt::ISODateWithMs)},
+        {"settings", QJsonObject::fromVariantMap(recordingSettings_)},
+        {"source", QJsonObject{{"type", "display"}, {"displayId", static_cast<int>(display.displayID)},
+            {"widthPx", pixels.width()}, {"heightPx", pixels.height()},
+            {"globalBoundsPoints", QJsonObject{{"x", bounds.origin.x}, {"y", bounds.origin.y},
+                {"width", bounds.size.width}, {"height", bounds.size.height}}}}}};
+    lastProjectPath_ = projectDirectory;
+    emit lastRecordingPathChanged();
+    if (!impl_->pointerRecorder.start(display.displayID, pixels, projectDirectory)) {
+        const QString failure = impl_->pointerRecorder.error();
+        impl_->projectManifest.insert("state", "failed");
+        impl_->projectManifest.insert("error", failure);
+        writeProject(projectDirectory, impl_->projectManifest);
+        setPermissionIssue(QStringLiteral("input"), failure);
+        setRecordingStatus(failure);
+        stop();
+        return;
+    }
+    impl_->projectManifest.insert("state", "recording");
+    if (!writeProject(projectDirectory, impl_->projectManifest)) {
+        impl_->pointerRecorder.stop();
+        setRecordingStatus(QStringLiteral("无法保存录制工程清单"));
+        stop();
+        return;
+    }
+    const bool micMuted = recordingSettings_.value("muteMicrophone").toBool();
+    if (!micMuted) {
+        // Microphone is kept as its own track so it can be re-edited later.
+        MicrophoneRecorder *recorder = [[MicrophoneRecorder alloc] init];
+        NSString *micPath = (projectDirectory + QStringLiteral("/microphone.m4a")).toNSString();
+        if (![recorder startAtURL:[NSURL fileURLWithPath:micPath]]) {
+            NSString *reason = [recorder lastError];
+            const QString failure = reason ? QString::fromNSString(reason)
+                : QStringLiteral("麦克风录音启动失败，请检查麦克风权限与输入设备。");
+            impl_->pointerRecorder.stop();
+            impl_->projectManifest.insert("state", "failed");
+            impl_->projectManifest.insert("error", failure);
+            writeProject(projectDirectory, impl_->projectManifest);
+            setPermissionIssue(QStringLiteral("microphone"), failure);
+            setRecordingStatus(failure);
+            stop();
+            return;
+        }
+        impl_->micRecorder = recorder;
+    }
+    setPermissionIssue({}, {});
+    NSError *error = nil;
+    auto gate = impl_->gate;
+    impl_->receiver->recordingFinished = [gate](QString output, QString failure, QJsonObject metadata) {
+        postToOwner(gate, [output, failure, metadata](MacCapture *owner) {
+            if (owner->impl_->pointerRecorder.active())
+                owner->impl_->projectManifest.insert("pointer", owner->impl_->pointerRecorder.stop());
+            QString problem = failure;
+            if (problem.isEmpty()) problem = owner->impl_->projectManifest.value("pointer").toObject().value("writeError").toString();
+            owner->impl_->projectManifest.insert("video", metadata);
+            owner->impl_->projectManifest.insert("state", problem.isEmpty() ? "processing" : "failed");
+            owner->impl_->projectManifest.insert("error", problem);
+            if (!writeProject(owner->impl_->projectDirectory, owner->impl_->projectManifest))
+                problem = QStringLiteral("录制工程清单保存失败，原始素材仍在工程目录");
+            owner->setRecording(false);
+            if (problem.isEmpty()) {
+                owner->setLastRecordingPath(output);
+                owner->setRecordingStatus(QStringLiteral("正在生成鼠标时间轴与自动缩放区间…"));
+                const QString directory = owner->impl_->projectDirectory;
+                auto processingGate = owner->impl_->gate;
+                QThreadPool::globalInstance()->start([directory, metadata, processingGate] {
+                    const auto processing = ProjectTimeline::build(directory, metadata);
+                    postToOwner(processingGate, [directory, processing](MacCapture *current) {
+                        current->impl_->projectManifest.insert("processing", processing);
+                        const bool ok = processing.value("state") == "generated";
+                        current->impl_->projectManifest.insert("state", ok ? "readyForProcessing" : "recordedUnprocessed");
+                        const bool saved = writeProject(directory, current->impl_->projectManifest);
+                        current->recordingFinalizing_ = false;
+                        current->setRecordingStatus(!saved ? QStringLiteral("工程清单保存失败，原始素材保留：") + directory
+                            : ok ? QStringLiteral("录制工程已保存：") + directory
+                            : QStringLiteral("原始录像已保存，时间轴处理失败：") + processing.value("error").toString());
+                    });
+                });
+            } else {
+                owner->recordingFinalizing_ = false;
+                owner->setRecordingStatus(QStringLiteral("录制工程保存失败：") + problem);
+                if (owner->running_) owner->stop();
+            }
+        });
+    };
+    if (![impl_->receiver beginRecordingAtURL:[NSURL fileURLWithPath:path.toNSString()]
+        size:displayPixelSize(display) error:&error]) {
+        if (impl_->micRecorder) {
+            [impl_->micRecorder stop];
+            impl_->micRecorder = nil;
+        }
+        impl_->projectManifest.insert("pointer", impl_->pointerRecorder.stop());
+        impl_->projectManifest.insert("state", "failed");
+        impl_->projectManifest.insert("error", errorText(error));
+        writeProject(projectDirectory, impl_->projectManifest);
+        setRecordingStatus(QStringLiteral("无法开始录像：") + errorText(error));
+        stop();
+        return;
+    }
+    setLastRecordingPath({});
+    setRecording(true);
+    setRecordingStatus(QStringLiteral("正在录制屏幕…"));
+}
+
+void MacCapture::stopRecording() {
+    if (!recording_ || !impl_->receiver)
+        return;
+    recordingFinalizing_ = true;
+    setRecordingPaused(false);
+    impl_->projectManifest.insert("pointer", impl_->pointerRecorder.stop());
+    if (impl_->micRecorder) {
+        impl_->projectManifest.insert("microphone", [impl_->micRecorder metadata]);
+        [impl_->micRecorder stop];
+        impl_->micRecorder = nil;
+    }
+    impl_->projectManifest.insert("state", "finalizing");
+    writeProject(impl_->projectDirectory, impl_->projectManifest);
+    setRecording(false);
+    setRecordingStatus(QStringLiteral("正在保存录像…"));
+    [impl_->receiver endRecording];
+}
+
+void MacCapture::pauseRecording() {
+    if (!recording_ || recordingFinalizing_ || recordingPaused_ || !impl_->receiver)
+        return;
+    impl_->pointerRecorder.pause();
+    [impl_->micRecorder pause];
+    [impl_->receiver pauseRecording];
+    setRecordingPaused(true);
+    setRecordingStatus(QStringLiteral("已暂停录制"));
+}
+
+void MacCapture::resumeRecording() {
+    if (!recording_ || !recordingPaused_ || !impl_->receiver)
+        return;
+    [impl_->receiver resumeRecording];
+    impl_->pointerRecorder.resume();
+    [impl_->micRecorder resume];
+    setRecordingPaused(false);
+    setRecordingStatus(QStringLiteral("正在录制屏幕…"));
+}
+
+void MacCapture::openLastProject() {
+    if (!lastProjectPath_.isEmpty()) QDesktopServices::openUrl(QUrl::fromLocalFile(lastProjectPath_));
+}
+
+void MacCapture::openRecordingDirectory() {
+    QString directory = recordingSettings_.value("recordingDirectory").toString();
+    if (directory.isEmpty())
+        directory = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation)
+            + QStringLiteral("/Jianku Screen");
+    QDir().mkpath(directory);
+    QDesktopServices::openUrl(QUrl::fromLocalFile(directory));
+}
+
+void MacCapture::stop() {
+    recordWhenReady_ = false;
+    if (recording_)
+        stopRecording();
+    if (!impl_->stream)
+        return;
+    if (busy_ && !running_) {
+        stopRequested_ = true;
+        return;
+    }
+    stopRequested_ = false;
+    SCStream *stream = impl_->stream;
+    impl_->stream = nil;
+    impl_->receiver = nil;
+    ++impl_->generation;
+    setRunning(false);
+    setBusy(true);
+    setStatus(QStringLiteral("正在停止采集…"));
+    auto gate = impl_->gate;
+    [stream stopCaptureWithCompletionHandler:^(NSError *error) {
+        const QString failure = errorText(error);
+        postToOwner(gate, [error, failure](MacCapture *owner) {
+            owner->frameStore_->clear();
+            owner->setBusy(false);
+            owner->setStatus(error
+                ? QStringLiteral("停止采集时出错：") + failure
+                : QStringLiteral("采集已停止。"));
+        });
+    }];
+}

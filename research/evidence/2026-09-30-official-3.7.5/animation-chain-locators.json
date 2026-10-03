@@ -1,0 +1,250 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-10-01",
+  "reference": "Screen Studio 3.7.5-4595 official Apple Silicon distribution",
+  "status": "static_analysis_not_frame_validated",
+  "method": "Read official bundle; isolated string-table decoding; verify raw expressions, numeric constants and import/export links. No application business code executed during this analysis.",
+  "offset_definition": "Zero-based UTF-8 byte offset inside the original asar entry, not the decoded analysis copy or whole archive. Search token is the original symbol declaration; full entry hash identifies the resource.",
+  "entries": [
+    {
+      "path": "dist/D4qqfDv_.js",
+      "sha256": "11f9c00d21a02028469a261ed35eaeca2997427d87aadbea96b07d8406d145ca",
+      "locators": [
+        {
+          "search_token": "function nne(",
+          "offset_bytes": 1086996
+        },
+        {
+          "search_token": "function TR(",
+          "offset_bytes": 1087326
+        },
+        {
+          "search_token": "function cS(",
+          "offset_bytes": 1035122
+        },
+        {
+          "search_token": "function Rw(",
+          "offset_bytes": 1035653
+        },
+        {
+          "search_token": "function lS(",
+          "offset_bytes": 1035797
+        },
+        {
+          "search_token": "function sm(",
+          "offset_bytes": 1036601
+        },
+        {
+          "search_token": "TTe=",
+          "offset_bytes": 881023
+        },
+        {
+          "search_token": "CTe=",
+          "offset_bytes": 881123
+        },
+        {
+          "search_token": "ITe=",
+          "offset_bytes": 881173
+        },
+        {
+          "search_token": "kTe=",
+          "offset_bytes": 881220
+        },
+        {
+          "search_token": "function uS(",
+          "offset_bytes": 992943
+        },
+        {
+          "search_token": "function $o(",
+          "offset_bytes": 994072
+        },
+        {
+          "search_token": "class kc",
+          "offset_bytes": 1039234
+        },
+        {
+          "search_token": "class xne",
+          "offset_bytes": 1104560
+        },
+        {
+          "search_token": "const bfe=",
+          "offset_bytes": 1567043
+        },
+        {
+          "search_token": "function YS(",
+          "offset_bytes": 1567715
+        },
+        {
+          "search_token": "function xfe(",
+          "offset_bytes": 1568418
+        },
+        {
+          "search_token": "function lF(",
+          "offset_bytes": 1570037
+        },
+        {
+          "search_token": "Tfe=",
+          "offset_bytes": 1569108
+        },
+        {
+          "search_token": "class fF",
+          "offset_bytes": 1570425
+        },
+        {
+          "search_token": "class Cfe",
+          "offset_bytes": 1573543
+        }
+      ]
+    },
+    {
+      "path": "dist/5NxSBPmq.js",
+      "sha256": "e4d1e27f35d85a1e6038f28930655702e46bf7f46919f48346f0a027dd850efd",
+      "locators": [
+        {
+          "search_token": "function l0(",
+          "offset_bytes": 24489
+        },
+        {
+          "search_token": "function Ps(",
+          "offset_bytes": 24714
+        },
+        {
+          "search_token": "function Io(",
+          "offset_bytes": 24904
+        },
+        {
+          "search_token": "const w2=",
+          "offset_bytes": 1627804
+        },
+        {
+          "search_token": "class C2",
+          "offset_bytes": 1627863
+        },
+        {
+          "search_token": "function Zd(",
+          "offset_bytes": 1633827
+        },
+        {
+          "search_token": "k2=",
+          "offset_bytes": 1634353
+        },
+        {
+          "search_token": "H2=",
+          "offset_bytes": 1654248
+        },
+        {
+          "search_token": "class lx",
+          "offset_bytes": 1654269
+        },
+        {
+          "search_token": "function O2(",
+          "offset_bytes": 1657436
+        },
+        {
+          "search_token": "const Q2=",
+          "offset_bytes": 1659192
+        },
+        {
+          "search_token": "function q2(",
+          "offset_bytes": 1659891
+        },
+        {
+          "search_token": "function iG(",
+          "offset_bytes": 1660297
+        },
+        {
+          "search_token": "function sG(",
+          "offset_bytes": 1660809
+        },
+        {
+          "search_token": "function nG(",
+          "offset_bytes": 1661221
+        },
+        {
+          "search_token": "class fG",
+          "offset_bytes": 1666476
+        },
+        {
+          "search_token": "const gG=",
+          "offset_bytes": 1672025
+        },
+        {
+          "search_token": "function Ax(",
+          "offset_bytes": 2139824
+        },
+        {
+          "search_token": "function Vd(",
+          "offset_bytes": 2140084
+        },
+        {
+          "search_token": "function OA(",
+          "offset_bytes": 2158860
+        },
+        {
+          "search_token": "function JA(",
+          "offset_bytes": 2159713
+        },
+        {
+          "search_token": "function $A(",
+          "offset_bytes": 2160010
+        },
+        {
+          "search_token": "function ek(",
+          "offset_bytes": 2160673
+        },
+        {
+          "search_token": "function ik(",
+          "offset_bytes": 2161346
+        },
+        {
+          "search_token": "const rk=",
+          "offset_bytes": 2161556
+        },
+        {
+          "search_token": "const nk=",
+          "offset_bytes": 2161799
+        },
+        {
+          "search_token": "class Ly",
+          "offset_bytes": 2186848
+        },
+        {
+          "search_token": "function Jk(",
+          "offset_bytes": 2188514
+        },
+        {
+          "search_token": "const Qk=",
+          "offset_bytes": 2188936
+        },
+        {
+          "search_token": "$k=",
+          "offset_bytes": 2189184
+        },
+        {
+          "search_token": "function tZ(",
+          "offset_bytes": 2190085
+        },
+        {
+          "search_token": "function iZ(",
+          "offset_bytes": 2190924
+        },
+        {
+          "search_token": "class rZ",
+          "offset_bytes": 2191411
+        },
+        {
+          "search_token": "class nZ",
+          "offset_bytes": 2192505
+        },
+        {
+          "search_token": "function lZ(",
+          "offset_bytes": 2195743
+        },
+        {
+          "search_token": "function hZ(",
+          "offset_bytes": 2196521
+        }
+      ]
+    }
+  ]
+}

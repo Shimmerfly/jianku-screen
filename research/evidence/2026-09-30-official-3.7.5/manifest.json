@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-09-30",
+  "source": "https://screenstudioassets.com/releases/3.7.5-4595/Screen%20Studio%203.7.5-4595%20Apple%20Silicon.dmg",
+  "source_page": "https://screen.studio/download",
+  "guide_snapshot": {
+    "source": "https://screen.studio/guide/managing-project-settings-for-new-recordings",
+    "file": "guide-managing-project-settings-for-new-recordings.html",
+    "size_bytes": 376136,
+    "sha256": "78f44944babd9c29103b5444e0a58511b419e1f02b80e0837f538f0ffb2f14b1",
+    "relevance": "Last-project settings may become new-recording defaults"
+  },
+  "distribution": "official Apple Silicon download, mounted read-only and inspected statically",
+  "dmg": {
+    "size_bytes": 365619708,
+    "sha256": "ae9a1cdcd7ab1df2a84e5e9fbb7b6e55d96c106dad1c6fa5930ca78fa3e6cb2b"
+  },
+  "app": {
+    "bundle_version": "3.7.5-4595",
+    "code_signing_identity": "Developer ID Application: Adam Pietrasiak (SXF593CX2N)",
+    "team_id": "SXF593CX2N",
+    "notarization_ticket": "stapled",
+    "codesign_verify_deep_strict": "passed"
+  },
+  "asar": {
+    "path_in_app": "Contents/Resources/app.asar",
+    "sha256": "fc9e581dc133c47607206ea118792af5feff320e4e8180c97b321f950cee66bf",
+    "header_size_bytes": 1220888,
+    "data_start_byte": 1220896,
+    "inspected_entries": [
+      {
+        "path": "dist/D4qqfDv_.js",
+        "size_bytes": 2330639,
+        "offset_relative_to_data_start_bytes": 14727823,
+        "sha256": "11f9c00d21a02028469a261ed35eaeca2997427d87aadbea96b07d8406d145ca",
+        "evidence": "base configuration, event preprocessing, spring constants and numerical solver, recording-type settings function"
+      },
+      {
+        "path": "dist/DVk_SCB7.js",
+        "size_bytes": 16121,
+        "offset_relative_to_data_start_bytes": 17226011,
+        "sha256": "bfd3439a2a5974133ddcd781b1385b39ef61a07ba9a286f02b20322ebe1edafa",
+        "evidence": "animation picker preset labels and mappings"
+      },
+      {
+        "path": "dist/5NxSBPmq.js",
+        "size_bytes": 2229958,
+        "offset_relative_to_data_start_bytes": 11611450,
+        "sha256": "e4d1e27f35d85a1e6038f28930655702e46bf7f46919f48346f0a027dd850efd",
+        "evidence": "animation timeline, cursor target lookahead and conditional springs, focus grouping and framing, motion blur call paths and shaders"
+      },
+      {
+        "path": "dist-electron/index.js",
+        "size_bytes": 7484678,
+        "offset_relative_to_data_start_bytes": 3528722,
+        "sha256": "82c9558107908cb8fa6e3f08abf5bf965db487585d8588e9d46dc8958a2c7687",
+        "evidence": "project creation and initial automatic zoom range generation path"
+      }
+    ]
+  },
+  "inspection_limit": "The official app was launched for settings UI observation on 2026-09-30; no controlled recording, new-project result, export, or frame comparison was completed. This manifest stores derived findings and hashes, not copied proprietary bundles.",
+  "followup_static_analysis": {
+    "observed_at": "2026-10-01",
+    "report": "../../桌面动画处理链-官方3.7.5静态.md",
+    "locators": "animation-chain-locators.json",
+    "status": "static_call_paths_not_controlled_runtime_or_export_validation"
+  }
+}

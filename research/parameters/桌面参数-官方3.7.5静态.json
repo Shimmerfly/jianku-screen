@@ -1,0 +1,245 @@
+{
+  "schema_version": 1,
+  "reference": "Screen Studio 3.7.5-4595 official Apple Silicon distribution",
+  "status": "official_binary_static_analysis_not_runtime_defaults",
+  "evidence_manifest": "../evidence/2026-09-30-official-3.7.5/manifest.json",
+  "animation_picker_presets": {
+    "cursor": {
+      "Smooth": {
+        "stiffness": 470,
+        "damping": 70,
+        "mass": 3
+      },
+      "Medium": {
+        "stiffness": 340,
+        "damping": 60,
+        "mass": 3
+      },
+      "Rapid": {
+        "stiffness": 530,
+        "damping": 40,
+        "mass": 1
+      },
+      "None": {
+        "spring_disabled": true
+      }
+    },
+    "screen": {
+      "Focused": {
+        "stiffness": 200,
+        "damping": 40,
+        "mass": 2.25
+      },
+      "Smooth": {
+        "stiffness": 170,
+        "damping": 50,
+        "mass": 3
+      }
+    },
+    "picker_reset_or_fallback": {
+      "cursor": "Smooth",
+      "screen": "Focused"
+    }
+  },
+  "base_configuration": {
+    "mouseMovementSpring": {
+      "stiffness": 470,
+      "damping": 70,
+      "mass": 3
+    },
+    "screenMovementSpring": {
+      "stiffness": 200,
+      "damping": 40,
+      "mass": 2.25
+    },
+    "mouseClickSpring": {
+      "stiffness": 700,
+      "damping": 30,
+      "mass": 1
+    },
+    "motionBlurAmount": 1,
+    "motionBlurCursorAmount": 1,
+    "motionBlurScreenMoveAmount": 1,
+    "motionBlurScreenZoomAmount": 1,
+    "backgroundPaddingRatio": 10,
+    "backgroundBlur": 0,
+    "cursorSize": 1.5,
+    "windowBorderRadius": 12,
+    "shadowIntensity": 0.75,
+    "shadowAngle": 90,
+    "shadowDistance": 25,
+    "shadowBlur": 20
+  },
+  "recording_type_override_in_inspected_function": {
+    "window_or_area_or_external_device_mode": {
+      "backgroundPaddingRatio": 10,
+      "windowBorderRadius": 12
+    },
+    "when_both_flags_false": {
+      "backgroundPaddingRatio": 0,
+      "windowBorderRadius": 0
+    },
+    "note": "The second flag is isExternalDeviceMode. This constructor does not by itself prove the effective values in a new project; saved settings and presets can override values."
+  },
+  "automatic_zoom_initial_ranges": {
+    "source": "dist-electron/index.js Qye called from XX during project creation",
+    "status": "official_binary_static_analysis_not_runtime_verified",
+    "external_device_mode": "returns no initial ranges",
+    "click_filter": "recordingTimeMs < durationMs - 1000",
+    "candidate_start_ms": "max(floor(recordingTimeMs) - 300, 1)",
+    "candidate_end_ms": "min(floor(recordingTimeMs) + 2500, durationMs - 800)",
+    "merge_gap_ms_between_candidate_ranges": 2500,
+    "fallback_zoom_level": 2,
+    "note": "These are generated editing ranges, not the measured visual zoom-in and zoom-out times or the effective zoom level after settings and edits."
+  },
+  "motion_blur_renderer": {
+    "strength_factor": "fps / 60",
+    "cursor_strength_source": "global amount multiplied by cursor amount; zoom channel zero",
+    "screen_move_strength_source": "global amount multiplied by screen move amount",
+    "screen_zoom_strength_source": "global amount multiplied by screen zoom amount",
+    "move_filter_requested_kernel_size": 21,
+    "zoom_filter_max_kernel_size": 13,
+    "selection": "frame-bound changes select a move or zoom filter by the dominant change; zero or tiny changes may receive no filter",
+    "note": "Static renderer path; effective sample count, final appearance, preview/export parity and runtime defaults need frame tests.",
+    "dominant_change_min_length": 1,
+    "move_vector_min_length_after_strength": 0.01,
+    "move_filter_offset": "-length(strength-scaled vector) / 2",
+    "move_sample_distribution": "center plus 20 extra equal-weight samples for kernel 21; bias vector * i/20, i = 0..19; one sample repeats center",
+    "zoom_sample_weight": "4 * (percent - percent^2), normalized by total weight",
+    "zoom_sample_percent": "(t + deterministic texture-coordinate random offset) / maxKernelSize",
+    "parent_motion": "recursive subtraction plus per-axis sign suppression in Q2",
+    "alpha_conversion_in_zoom_shader": "extra premultiply/unpremultiply statements commented; input alpha representation unverified"
+  },
+  "unverified": [
+    "Fresh-project effective defaults when user preferences, last-project settings and presets are considered",
+    "Runtime initial zoom ranges, actual visual zoom timing, target selection and effective scale",
+    "Motion blur appearance in an exported project at different frame rates",
+    "Meaning and output units of padding ratio, radius and shadow fields",
+    "Runtime equivalence of desktop and website solvers, timebase and effects",
+    "Captured cursor coordinate units, same-time event ordering, resource switching and hotspots",
+    "Runtime target lookahead, event filtering and grouped focus position",
+    "Timeline resets and fractional-frame results under trimming and speed changes",
+    "Texture alpha representation, filter areas and parent/child blur appearance"
+  ],
+  "animation_chain_report": "../桌面动画处理链-官方3.7.5静态.md",
+  "static_findings_date": "2026-10-01",
+  "cursor_target_and_effects": {
+    "click_position_lookahead_ms_inclusive": 500,
+    "near_click_spring_lookahead_ms_inclusive": 175,
+    "near_click_spring": {
+      "stiffness": 530,
+      "damping": 40,
+      "mass": 1
+    },
+    "drag_spring": {
+      "stiffness": 1000,
+      "damping": 40,
+      "mass": 1
+    },
+    "disabled_spring": {
+      "stiffness": 1,
+      "damping": 1,
+      "mass": 0
+    },
+    "selection_priority": [
+      "disabled globally or in slice",
+      "near future/current click",
+      "drag",
+      "project mouseMovementSpring"
+    ],
+    "rotation": {
+      "x_position_difference_window_ms": 400,
+      "factor": 0.03,
+      "ratio_source": "cursorRotateOnXMovementRatio",
+      "clamp_degrees": [
+        -20,
+        20
+      ],
+      "after_clamp_adds": "cursorBaseRotation"
+    },
+    "click_scale": {
+      "target": 0.8,
+      "mouse_down_lookahead_ms_inclusive": 130,
+      "also_applies_when_next_event_is": "mouseUp"
+    },
+    "hide": {
+      "target": {
+        "alpha": 0,
+        "scale": 0.8,
+        "blur": 5
+      },
+      "future_move_restore_window_ms_exclusive": 250,
+      "idle_threshold_source": "hideNotMovingCursorAfterMs"
+    },
+    "zoomer_and_fader_spring": {
+      "stiffness": 300,
+      "damping": 30,
+      "mass": 0.3
+    },
+    "mask_blurrer_spring": {
+      "stiffness": 1430,
+      "damping": 70,
+      "mass": 1
+    },
+    "note": "Target planning values, not measured displayed-cursor timing. The inspected zoomer-and-fader call uses its own spring rather than the base mouseClickSpring field."
+  },
+  "event_preprocessing": {
+    "source": "xne / nne / TR",
+    "base_removeCurshorShakeTreshold": 500,
+    "metric": "abs(dx) + abs(dy)",
+    "threshold_unit": "recorded coordinate units; logical points versus pixels not yet verified",
+    "lookahead_event_count": 2,
+    "keep_rule": "keep if either next event is absent or distance to either is <= threshold",
+    "removed_mouse_down": "marks the next encountered mouseUp for removal",
+    "not_a_time_threshold": true
+  },
+  "desktop_spring_solver": {
+    "source": "YS / xfe / fF / Cfe",
+    "integrator": "semi-implicit Euler, milliseconds converted to seconds",
+    "nominal_substep_ms": 1,
+    "fractional_tail_rule": "ceil(dtMs) - dtMs when final index > dtMs",
+    "max_ceil_dt_ms": 10000,
+    "fallback_config": {
+      "stiffness": 90,
+      "damping": 9,
+      "mass": 1,
+      "clamp": false,
+      "precision": 0.002
+    },
+    "target_change_preserves_velocity": true,
+    "effective_precision_on_target_change": "max(1, abs(current - target)) * config.precision; equal values return 1",
+    "settle_time_estimator": {
+      "normalized_start": 0,
+      "normalized_target": 1,
+      "initial_velocity": 1e-06,
+      "step_ms": "1000 / 60",
+      "cap_ms": 20000
+    },
+    "note": "Settle-time shortcut and zero-mass snap are additional paths. Static linkage to renderer established; website/desktop runtime equivalence unverified."
+  },
+  "animation_timeline": {
+    "source": "C2 connected through gG / fG",
+    "time_quantization": "near integer within strict 1e-7 tolerance then floor frame index",
+    "influence_window_ms": 3500,
+    "eager_frames": 60,
+    "per_frame_order": [
+      "map playback time to source time",
+      "advance spring using existing target/config",
+      "set target for mapped source time",
+      "snap if animations disabled",
+      "update spring config",
+      "cache value"
+    ],
+    "fractional_frame_rendering": "recursive linear interpolation between adjacent integer-frame styles",
+    "reset_source_mapping": "resetSpringAtTime requests styles with unmapped reset time; runtime effect for trims/speed changes unverified"
+  },
+  "automatic_focus_position": {
+    "source": "kc range getters / Qk / Ly / Jk / tZ / rZ / nZ",
+    "event_input": "all mouseEvents in range in inspected Qk path",
+    "grouping": "consecutive greedy bounding boxes",
+    "group_area": "screen / swap(scaleToFillContentArea) / range.zoom * {x: 0.5, y: 0.7}",
+    "group_target": "bounding-box center, chosen by group first-event timestamp",
+    "edge_mapping_upper_epsilon": 0.0001,
+    "note": "Group center uses later events; complete coordinate-unit chain and runtime framing unverified."
+  }
+}

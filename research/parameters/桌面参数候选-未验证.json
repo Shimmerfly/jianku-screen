@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "reference": "User-provided Screen Studio 3.5.0-4028 repack",
+  "status": "unverified_desktop_base_configuration_candidate",
+  "source": "../evidence/app/dist__Zoj8u8MF.js",
+  "source_sha256": "773af5b89aedb1b7d946aeb7efe0b58686b40ef9a9d0b9095225005980dcac11",
+  "static_reference_chain": {
+    "mouseMovementSpring": "gw.mouseMovementSpring -> ZJ -> i5",
+    "screenMovementSpring": "gw.screenMovementSpring -> JJ -> NQ",
+    "mouseClickSpring": "gw.mouseClickSpring -> QJ",
+    "windowBorderRadius": "gw.windowBorderRadius -> $Q"
+  },
+  "candidate_base_values": {
+    "mouseMovementSpring": {
+      "stiffness": 470,
+      "damping": 70,
+      "mass": 3
+    },
+    "screenMovementSpring": {
+      "stiffness": 200,
+      "damping": 40,
+      "mass": 2.25
+    },
+    "mouseClickSpring": {
+      "stiffness": 700,
+      "damping": 30,
+      "mass": 1
+    },
+    "motionBlurAmount": 1,
+    "motionBlurCursorAmount": 1,
+    "motionBlurScreenMoveAmount": 1,
+    "motionBlurScreenZoomAmount": 1,
+    "backgroundPaddingRatio": 10,
+    "backgroundBlur": 0,
+    "insetPadding": {
+      "bottom": 0,
+      "left": 0,
+      "right": 0,
+      "top": 0
+    },
+    "insetAlpha": 0.5,
+    "cursorSize": 1.5,
+    "cursorRotateOnXMovementRatio": 0.5,
+    "windowBorderRadius": 12,
+    "shadowIntensity": 0.75,
+    "shadowAngle": 90,
+    "shadowDistance": 25,
+    "shadowBlur": 20,
+    "hideNotMovingCursorAfterMs": null
+  },
+  "warnings": [
+    "Not official distribution; no runtime validation.",
+    "Base settings are overridden by recording type and saved settings; not proof of effective new-project defaults.",
+    "Units of ratios, radius and shadows are not yet traced; do not assume output pixels or percentage.",
+    "motionBlurAmount=1 is a config multiplier, not 1 pixel, 1 ms, shutter angle or sample count.",
+    "screenMovementSpring does not establish separate zoom-in, zoom-out and pan curves.",
+    "Guide screenshots are illustrative and may use another version or modified values."
+  ]
+}
