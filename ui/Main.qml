@@ -315,7 +315,10 @@ ApplicationWindow {
                 UiComboBox {
                     id: displayChoice
                     visible: root.sourceKind === "display"
-                    Layout.preferredWidth: 210
+                    // Wide enough for "显示器 1 · 3360 × 2100 · 60 Hz": the refresh
+                    // rate is part of what the source is, and truncating it defeats
+                    // the point of showing it.
+                    Layout.preferredWidth: 268
                     model: capture.displayNames
                     enabled: !capture.running && !capture.busy
                 }
