@@ -1,0 +1,872 @@
+#include "ProjectCompositor.h"
+
+#include "../animation/AnimationSettings.h"
+#include "../animation/AutoFocusEngine.h"
+
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QLinearGradient>
+#include <QPainter>
+#include <QPainterPath>
+#include <QProcess>
+#include <algorithm>
+#include <cmath>
+
+namespace Render {
+namespace {
+
+QString readTextFile(const QString &path, QString *error) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (error)
+            *error = QStringLiteral("无法读取 %1：%2").arg(path, file.errorString());
+        return {};
+    }
+    return QString::fromUtf8(file.readAll());
+}
+
+bool parseJson(const QString &text, QJsonDocument *document, const QString &path, QString *error) {
+    QJsonParseError parseError;
+    *document = QJsonDocument::fromJson(text.toUtf8(), &parseError);
+    if (parseError.error != QJsonParseError::NoError) {
+        if (error)
+            *error = QStringLiteral("%1 不是合法 JSON：%2").arg(path, parseError.errorString());
+        return false;
+    }
+    return true;
+}
+
+// Every JSONL file in a project is a flat list of objects; one broken line makes
+// the recording untrustworthy, so the whole load fails instead of silently
+// dropping events (which would desynchronise the pointer).
+bool readJsonLines(const QString &path, std::vector<QJsonObject> *rows, QString *error) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (error)
+            *error = QStringLiteral("无法读取 %1：%2").arg(path, file.errorString());
+        return false;
+    }
+    qint64 lineNumber = 0;
+    while (!file.atEnd()) {
+        const QByteArray line = file.readLine().trimmed();
+        ++lineNumber;
+        if (line.isEmpty())
+            continue;
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(line, &parseError);
+        if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+            if (error)
+                *error = QStringLiteral("%1 第 %2 行损坏").arg(path).arg(lineNumber);
+            return false;
+        }
+        rows->push_back(document.object());
+    }
+    if (file.error() != QFileDevice::NoError) {
+        if (error)
+            *error = QStringLiteral("读取 %1 失败：%2").arg(path, file.errorString());
+        return false;
+    }
+    return true;
+}
+
+double number(const QJsonObject &object, const char *key, double fallback = 0.0) {
+    const QJsonValue value = object.value(QLatin1String(key));
+    if (value.isDouble())
+        return value.toDouble();
+    if (value.isString()) {
+        bool ok = false;
+        const double parsed = value.toString().toDouble(&ok);
+        if (ok)
+            return parsed;
+    }
+    return fallback;
+}
+
+Animation::InputKind kindFor(const QString &type) {
+    if (type == QStringLiteral("mouseDown"))
+        return Animation::InputKind::Down;
+    if (type == QStringLiteral("mouseUp"))
+        return Animation::InputKind::Up;
+    if (type == QStringLiteral("mouseDragged"))
+        return Animation::InputKind::Drag;
+    return Animation::InputKind::Move;
+}
+
+QColor colorFrom(const QVariantMap &settings, const char *key, const QColor &fallback) {
+    const QColor color(settings.value(QLatin1String(key)).toString());
+    return color.isValid() ? color : fallback;
+}
+
+// Separable box blur, repeated to approximate a Gaussian. Both callers cache the
+// result (background and shadow sprite), so this never runs per frame.
+void boxBlur(QImage &image, int radius, int passes) {
+    if (radius <= 0 || image.isNull() || passes <= 0)
+        return;
+    const int width = image.width();
+    const int height = image.height();
+    QImage scratch(image.size(), QImage::Format_ARGB32_Premultiplied);
+    std::vector<int> channel(std::max(width, height));
+
+    for (int pass = 0; pass < passes; ++pass) {
+        for (int y = 0; y < height; ++y) {
+            const QRgb *src = reinterpret_cast<const QRgb *>(image.constScanLine(y));
+            QRgb *dst = reinterpret_cast<QRgb *>(scratch.scanLine(y));
+            for (int component = 0; component < 4; ++component) {
+                int sum = 0;
+                const int shift = component * 8;
+                for (int x = -radius; x <= radius; ++x)
+                    sum += (src[std::clamp(x, 0, width - 1)] >> shift) & 0xff;
+                const int count = 2 * radius + 1;
+                for (int x = 0; x < width; ++x) {
+                    channel[x] = sum / count;
+                    const int outgoing = std::clamp(x - radius, 0, width - 1);
+                    const int incoming = std::clamp(x + radius + 1, 0, width - 1);
+                    sum += ((src[incoming] >> shift) & 0xff) - ((src[outgoing] >> shift) & 0xff);
+                }
+                for (int x = 0; x < width; ++x)
+                    dst[x] = (dst[x] & ~(0xff << shift)) | (channel[x] << shift);
+            }
+        }
+        for (int x = 0; x < width; ++x) {
+            for (int component = 0; component < 4; ++component) {
+                const int shift = component * 8;
+                int sum = 0;
+                for (int y = -radius; y <= radius; ++y)
+                    sum += (reinterpret_cast<const QRgb *>(scratch.constScanLine(
+                                std::clamp(y, 0, height - 1)))[x] >> shift) & 0xff;
+                const int count = 2 * radius + 1;
+                for (int y = 0; y < height; ++y) {
+                    channel[y] = sum / count;
+                    const int outgoing = std::clamp(y - radius, 0, height - 1);
+                    const int incoming = std::clamp(y + radius + 1, 0, height - 1);
+                    sum += ((reinterpret_cast<const QRgb *>(scratch.constScanLine(incoming))[x] >> shift) & 0xff)
+                        - ((reinterpret_cast<const QRgb *>(scratch.constScanLine(outgoing))[x] >> shift) & 0xff);
+                }
+                for (int y = 0; y < height; ++y) {
+                    QRgb *dst = reinterpret_cast<QRgb *>(image.scanLine(y));
+                    dst[x] = (dst[x] & ~(0xff << shift)) | (channel[y] << shift);
+                }
+            }
+        }
+    }
+}
+
+QImage buildBackground(const ComposerSettings &settings, const QSize &size) {
+    QImage image(size, QImage::Format_ARGB32_Premultiplied);
+    image.fill(settings.backgroundColor);
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+
+    const QString type = settings.backgroundType;
+    if (type == QStringLiteral("image") || type == QStringLiteral("system")) {
+        QImage source(settings.backgroundImagePath);
+        if (!source.isNull()) {
+            const QSize scaled = source.size().scaled(size, Qt::KeepAspectRatioByExpanding);
+            const QRect target((size.width() - scaled.width()) / 2,
+                (size.height() - scaled.height()) / 2, scaled.width(), scaled.height());
+            painter.drawImage(target, source);
+        }
+    } else if (type == QStringLiteral("gradient")) {
+        // The preview rotates a square gradient by gradientAngle; reproducing it
+        // as a linear gradient along that angle keeps both ends visible.
+        const QPointF centre(size.width() / 2.0, size.height() / 2.0);
+        const double radians = settings.gradientAngle * M_PI / 180.0;
+        const double half = std::hypot(double(size.width()), double(size.height())) / 2.0;
+        QLinearGradient gradient(
+            QPointF(centre.x() - std::cos(radians) * half, centre.y() - std::sin(radians) * half),
+            QPointF(centre.x() + std::cos(radians) * half, centre.y() + std::sin(radians) * half));
+        gradient.setColorAt(0.0, settings.gradientStart);
+        gradient.setColorAt(1.0, settings.gradientEnd);
+        painter.fillRect(QRect(QPoint(0, 0), size), gradient);
+    }
+    painter.end();
+
+    if (settings.backgroundBlur > 0.001) {
+        // The reference maps its 0..40 slider onto a blur radius; the exact curve
+        // is not verified, so keep it proportional and leave the UI honest.
+        const int radius = static_cast<int>(std::round(settings.backgroundBlur * 0.25));
+        boxBlur(image, std::max(1, radius), 2);
+    }
+    return image;
+}
+
+QImage buildShadowSprite(const QSizeF &frameSize, const ComposerSettings &settings) {
+    const int pad = static_cast<int>(std::ceil(settings.shadowBlur)) + 8;
+    const int width = static_cast<int>(std::ceil(frameSize.width())) + pad * 2;
+    const int height = static_cast<int>(std::ceil(frameSize.height())) + pad * 2;
+    if (width <= 0 || height <= 0)
+        return {};
+    QImage image(width, height, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(0, 0, 0, static_cast<int>(std::clamp(settings.shadowIntensity, 0.0, 1.0) * 255)));
+    painter.drawRoundedRect(QRectF(pad, pad, frameSize.width(), frameSize.height()),
+        settings.radius, settings.radius);
+    painter.end();
+    if (settings.shadowBlur > 0.0)
+        boxBlur(image, std::max(1, static_cast<int>(std::round(settings.shadowBlur / 2.0))), 3);
+    return image;
+}
+
+QString findBackground(const QString &backgroundRoot, const QString &name) {
+    if (name.isEmpty())
+        return {};
+    const QStringList roots{backgroundRoot, QStringLiteral(JIANKU_SOURCE_DIR "/assets/backgrounds")};
+    for (const QString &root : roots) {
+        if (root.isEmpty())
+            continue;
+        const QString candidate = root + QLatin1Char('/') + name;
+        if (QFileInfo::exists(candidate))
+            return candidate;
+    }
+    return {};
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// Loading
+// ---------------------------------------------------------------------------
+
+ProjectData loadProject(const QString &directory, QString *errorOut) {
+    ProjectData data;
+    data.directory = directory;
+    auto fail = [&](const QString &message) {
+        data.valid = false;
+        data.error = message;
+        if (errorOut)
+            *errorOut = message;
+        return data;
+    };
+
+    QString error;
+    const QString manifestText = readTextFile(directory + QStringLiteral("/project.json"), &error);
+    if (manifestText.isEmpty())
+        return fail(error);
+    QJsonDocument manifestDocument;
+    if (!parseJson(manifestText, &manifestDocument, QStringLiteral("project.json"), &error))
+        return fail(error);
+    const QJsonObject manifest = manifestDocument.object();
+    data.settings = manifest.value(QStringLiteral("settings")).toObject().toVariantMap();
+
+    const QJsonObject source = manifest.value(QStringLiteral("source")).toObject();
+    data.sourceSize = QSizeF(source.value(QStringLiteral("widthPx")).toDouble(),
+        source.value(QStringLiteral("heightPx")).toDouble());
+    if (data.sourceSize.width() <= 0.0 || data.sourceSize.height() <= 0.0)
+        return fail(QStringLiteral("project.json 缺少有效的来源尺寸"));
+
+    const QJsonObject video = manifest.value(QStringLiteral("video")).toObject();
+    data.videoFile = video.value(QStringLiteral("file")).toString();
+    if (data.videoFile.isEmpty())
+        return fail(QStringLiteral("project.json 缺少视频文件名"));
+    if (!QFileInfo::exists(directory + QLatin1Char('/') + data.videoFile))
+        return fail(QStringLiteral("找不到原始视频：") + data.videoFile);
+    data.durationMs = number(video, "durationNs") / 1e6;
+    if (!(data.durationMs > 0.0))
+        return fail(QStringLiteral("project.json 的时长无效"));
+
+    // Frames: the recorded media times are the reference for the timeline.
+    std::vector<QJsonObject> frames;
+    if (!readJsonLines(directory + QStringLiteral("/video-frames.jsonl"), &frames, &error))
+        return fail(error);
+    if (frames.empty())
+        return fail(QStringLiteral("video-frames.jsonl 为空"));
+    data.frameMediaMs.reserve(frames.size());
+    for (const QJsonObject &frame : frames)
+        data.frameMediaMs.push_back(number(frame, "mediaTimeNs") / 1e6);
+    if (!std::is_sorted(data.frameMediaMs.begin(), data.frameMediaMs.end()))
+        return fail(QStringLiteral("video-frames.jsonl 的时间戳没有递增"));
+
+    // Events. `withinVideo` already excludes pre-roll and in-pause clicks.
+    std::vector<QJsonObject> events;
+    if (!readJsonLines(directory + QStringLiteral("/pointer-timeline.jsonl"), &events, &error))
+        return fail(error);
+    for (const QJsonObject &event : events) {
+        const QString type = event.value(QStringLiteral("type")).toString();
+        if (type != QStringLiteral("mouseMoved") && type != QStringLiteral("mouseDragged")
+            && type != QStringLiteral("mouseDown") && type != QStringLiteral("mouseUp"))
+            continue;
+        if (!event.value(QStringLiteral("withinVideo")).toBool())
+            continue;
+        Animation::InputEvent input;
+        input.timeMs = number(event, "mediaTimeNs") / 1e6;
+        input.x = number(event, "xPx");
+        input.y = number(event, "yPx");
+        input.kind = kindFor(type);
+        data.events.push_back(input);
+    }
+
+    std::vector<QJsonObject> observations;
+    if (!readJsonLines(directory + QStringLiteral("/cursor-timeline.jsonl"), &observations, &error))
+        return fail(error);
+    for (const QJsonObject &observation : observations) {
+        if (!observation.value(QStringLiteral("withinVideo")).toBool()
+            || !observation.value(QStringLiteral("available")).toBool())
+            continue;
+        const QString id = observation.value(QStringLiteral("cursorId")).toString();
+        if (id.isEmpty())
+            continue;
+        CursorObservation entry;
+        entry.mediaTimeMs = number(observation, "mediaTimeNs") / 1e6;
+        entry.cursorId = id;
+        data.cursorObservations.push_back(entry);
+    }
+
+    const QString cursorsText = readTextFile(directory + QStringLiteral("/cursors.json"), &error);
+    if (!cursorsText.isEmpty()) {
+        QJsonDocument cursorsDocument;
+        if (!parseJson(cursorsText, &cursorsDocument, QStringLiteral("cursors.json"), &error))
+            return fail(error);
+        const QJsonObject root = cursorsDocument.object();
+        for (auto it = root.begin(); it != root.end(); ++it) {
+            const QJsonObject entry = it.value().toObject();
+            CursorDefinition definition;
+            definition.id = it.key();
+            definition.imagePath = directory + QLatin1Char('/')
+                + entry.value(QStringLiteral("image")).toString();
+            definition.widthPx = number(entry, "widthPx");
+            definition.heightPx = number(entry, "heightPx");
+            definition.hotspotXPx = number(entry, "hotSpotXPx");
+            definition.hotspotYPx = number(entry, "hotSpotYPx");
+            QImage image(definition.imagePath);
+            if (image.isNull())
+                continue;   // a shape we cannot draw is skipped, its events fall back
+            definition.image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+            if (definition.widthPx <= 0.0)
+                definition.widthPx = definition.image.width();
+            if (definition.heightPx <= 0.0)
+                definition.heightPx = definition.image.height();
+            data.cursors.insert(definition.id, definition);
+        }
+    }
+
+    const QString zoomsText = readTextFile(directory + QStringLiteral("/automatic-zooms.json"), &error);
+    if (!zoomsText.isEmpty()) {
+        QJsonDocument zoomsDocument;
+        if (!parseJson(zoomsText, &zoomsDocument, QStringLiteral("automatic-zooms.json"), &error))
+            return fail(error);
+        const QJsonArray ranges = zoomsDocument.object().value(QStringLiteral("ranges")).toArray();
+        for (const QJsonValue &value : ranges) {
+            const QJsonObject range = value.toObject();
+            if (range.value(QStringLiteral("isDisabled")).toBool())
+                continue;
+            ZoomRangeEntry entry;
+            entry.startMs = number(range, "startTimeMs");
+            entry.endMs = number(range, "endTimeMs");
+            entry.zoom = number(range, "zoom", 2.0);
+            entry.snapToEdgesRatio = number(range, "snapToEdgesRatio", 0.25);
+            if (entry.endMs > entry.startMs)
+                data.zoomRanges.push_back(entry);
+        }
+        std::sort(data.zoomRanges.begin(), data.zoomRanges.end(),
+            [](const ZoomRangeEntry &a, const ZoomRangeEntry &b) { return a.startMs < b.startMs; });
+    }
+
+    data.valid = true;
+    if (errorOut)
+        errorOut->clear();
+    return data;
+}
+
+const CursorDefinition *cursorAt(const ProjectData &project, double mediaTimeMs) {
+    if (project.cursors.isEmpty())
+        return nullptr;
+    const CursorObservation *chosen = nullptr;
+    for (const CursorObservation &observation : project.cursorObservations) {
+        if (observation.mediaTimeMs <= mediaTimeMs)
+            chosen = &observation;
+        else
+            break;
+    }
+    // Before the first observation the recording started with some shape; using
+    // the first one avoids a cursor-less opening.
+    if (!chosen && !project.cursorObservations.empty())
+        chosen = &project.cursorObservations.front();
+    if (!chosen)
+        return nullptr;
+    const auto it = project.cursors.constFind(chosen->cursorId);
+    return it == project.cursors.constEnd() ? nullptr : &it.value();
+}
+
+// ---------------------------------------------------------------------------
+// Context
+// ---------------------------------------------------------------------------
+
+ComposeContext makeComposeContext(ProjectData project, const QString &backgroundRoot) {
+    ComposeContext context;
+    context.project = std::move(project);
+    if (!context.project.valid) {
+        context.error = context.project.error;
+        return context;
+    }
+
+    const QVariantMap &map = context.project.settings;
+    ComposerSettings &settings = context.settings;
+    settings.canvasSize = canvasSizeForAspect(context.project.sourceSize,
+        map.value(QStringLiteral("outputAspectRatio")).toString());
+    settings.paddingPercent = map.value(QStringLiteral("backgroundPaddingRatio")).toDouble();
+    settings.radius = map.value(QStringLiteral("windowBorderRadius")).toDouble();
+    settings.insetSize = map.value(QStringLiteral("insetSize")).toDouble();
+    settings.insetColor = colorFrom(map, "insetColor", QColor(QStringLiteral("#000000")));
+    settings.insetAlpha = map.value(QStringLiteral("insetAlpha"), 0.5).toDouble();
+    settings.shadowIntensity = map.value(QStringLiteral("shadowIntensity")).toDouble();
+    settings.shadowAngle = map.value(QStringLiteral("shadowAngle"), 90.0).toDouble();
+    settings.shadowDistance = map.value(QStringLiteral("shadowDistance")).toDouble();
+    settings.shadowBlur = map.value(QStringLiteral("shadowBlur")).toDouble();
+    settings.backgroundBlur = map.value(QStringLiteral("backgroundBlur")).toDouble();
+    settings.backgroundType = map.value(QStringLiteral("backgroundType"),
+        QStringLiteral("gradient")).toString();
+    settings.backgroundColor = colorFrom(map, "backgroundColor", QColor(QStringLiteral("#1b2230")));
+    settings.gradientStart = colorFrom(map, "gradientStartColor", QColor(QStringLiteral("#3F37C9")));
+    settings.gradientEnd = colorFrom(map, "gradientEndColor", QColor(QStringLiteral("#8C87DF")));
+    settings.gradientAngle = map.value(QStringLiteral("gradientAngle"), 135.0).toDouble();
+    settings.cursorSizeFactor = map.value(QStringLiteral("cursorSize"), 1.5).toDouble();
+    settings.hideCursor = map.value(QStringLiteral("hideCursor")).toBool();
+
+    if (settings.backgroundType == QStringLiteral("image")) {
+        const QString path = map.value(QStringLiteral("backgroundImagePath")).toString();
+        if (!path.isEmpty() && QFileInfo::exists(path))
+            settings.backgroundImagePath = path;
+    } else if (settings.backgroundType == QStringLiteral("system")) {
+        settings.backgroundImagePath = findBackground(backgroundRoot,
+            map.value(QStringLiteral("backgroundSystemName")).toString());
+    }
+
+    CanvasLayoutInput layoutInput;
+    layoutInput.canvas = settings.canvasSize;
+    layoutInput.content = context.project.sourceSize;
+    layoutInput.paddingPercent = settings.paddingPercent;
+    layoutInput.radius = settings.radius;
+    layoutInput.inset = settings.insetSize;
+    context.layout = computeCanvasLayout(layoutInput);
+    if (!context.layout.valid) {
+        context.error = QStringLiteral("画布布局计算失败：来源或画布尺寸无效");
+        return context;
+    }
+
+    const QSize canvasSize(context.width(), context.height());
+    if (canvasSize.width() < 2 || canvasSize.height() < 2) {
+        context.error = QStringLiteral("画布尺寸过小");
+        return context;
+    }
+    context.background = buildBackground(settings, canvasSize);
+    if (settings.shadowIntensity > 0.001)
+        context.shadow = buildShadowSprite(context.layout.frameRect.size(), settings);
+
+    context.valid = true;
+    return context;
+}
+
+// ---------------------------------------------------------------------------
+// Animation
+// ---------------------------------------------------------------------------
+
+AnimationSequence::AnimationSequence(const ProjectData &project,
+    const Animation::SpringConfig &screenSpring, const Animation::CursorSettings &cursorSettings)
+    : project_(project), cursorSettings_(cursorSettings) {
+    scale_.setConfig(screenSpring);
+    offsetX_.setConfig(screenSpring);
+    offsetY_.setConfig(screenSpring);
+    cursor_.setSettings(cursorSettings_);
+    Animation::EventTrack track;
+    track.setEvents(project.events);
+    cursor_.setTrack(std::move(track));
+}
+
+CameraPose AnimationSequence::cameraTargetAt(const ProjectData &project, double mediaTimeMs,
+    double snapFallback) {
+    const ZoomRangeEntry *active = nullptr;
+    for (const ZoomRangeEntry &range : project.zoomRanges) {
+        if (mediaTimeMs >= range.startMs && mediaTimeMs <= range.endMs) {
+            active = &range;
+            break;
+        }
+    }
+    if (!active || active->zoom <= 1.0)
+        return CameraPose{1.0, 0.0, 0.0};
+
+    // Grouping and framing come from the shared auto-focus engine, so the offline
+    // camera lands exactly where the analysis said it would.
+    Animation::ZoomRange range;
+    range.startMs = active->startMs;
+    range.endMs = active->endMs;
+    range.zoom = active->zoom;
+    const double snap = active->snapToEdgesRatio > 0.0 ? active->snapToEdgesRatio : snapFallback;
+    const Animation::FocusPoint focus = Animation::AutoFocusEngine::focusAt(range,
+        project.events, project.sourceSize.width(), project.sourceSize.height(), mediaTimeMs, snap);
+    const Animation::ScreenTransform transform = Animation::AutoFocusEngine::transformFor(focus,
+        active->zoom, project.sourceSize.width(), project.sourceSize.height(),
+        project.sourceSize.width(), project.sourceSize.height(), snap);
+    return CameraPose{transform.scale, transform.offsetX, transform.offsetY};
+}
+
+CameraPose AnimationSequence::cameraAt(double mediaTimeMs) {
+    const double snap = project_.settings.value(QStringLiteral("snapToEdgesRatio"), 0.25).toDouble();
+    const CameraPose target = cameraTargetAt(project_, mediaTimeMs, snap);
+
+    if (!started_) {
+        scale_.reset(target.scale);
+        offsetX_.reset(target.offsetX);
+        offsetY_.reset(target.offsetY);
+        timeMs_ = mediaTimeMs;
+        started_ = true;
+        cursor_.resetAt(mediaTimeMs);
+        return target;
+    }
+    const double delta = mediaTimeMs - timeMs_;
+    if (delta > 0.0) {
+        scale_.advanceBy(delta);
+        offsetX_.advanceBy(delta);
+        offsetY_.advanceBy(delta);
+    }
+    timeMs_ = mediaTimeMs;
+    scale_.setTargetValue(target.scale);
+    offsetX_.setTargetValue(target.offsetX);
+    offsetY_.setTargetValue(target.offsetY);
+    return CameraPose{scale_.value(), offsetX_.value(), offsetY_.value()};
+}
+
+CursorPose AnimationSequence::cursorAt(double mediaTimeMs) {
+    const Animation::CursorPose pose = cursor_.advanceTo(mediaTimeMs);
+    return CursorPose{pose.x, pose.y, pose.clickScale, pose.rotationDeg, pose.alpha};
+}
+
+// ---------------------------------------------------------------------------
+// Frame rendering
+// ---------------------------------------------------------------------------
+
+QImage composeFrame(const ComposeContext &context, const QImage &source,
+    const CameraPose &camera, const CursorPose &cursor, double mediaTimeMs, bool includeCursor) {
+    if (!context.valid || source.isNull())
+        return {};
+
+    const ComposerSettings &settings = context.settings;
+    const CanvasLayout &layout = context.layout;
+    const QSize canvasSize(context.width(), context.height());
+    const QRectF frameRect = layout.frameRect;
+    const double fitScale = layout.fitScale;
+
+    QImage canvas(canvasSize, QImage::Format_ARGB32_Premultiplied);
+    canvas.fill(Qt::transparent);
+
+    QPainter painter(&canvas);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+    painter.drawImage(0, 0, context.background);
+
+    // With the camera at rest the whole composition sits exactly on the layout
+    // the preview and the screenshot use; the transform only ever moves it.
+    const double cameraX = camera.offsetX * fitScale;
+    const double cameraY = camera.offsetY * fitScale;
+
+    // Shadow first: offset along the configured angle, behind the frame.
+    if (settings.shadowIntensity > 0.001 && !context.shadow.isNull()) {
+        const QImage &shadow = context.shadow;
+        const double radians = settings.shadowAngle * M_PI / 180.0;
+        const QPointF offset(std::cos(radians) * settings.shadowDistance,
+            std::sin(radians) * settings.shadowDistance);
+        painter.save();
+        painter.translate(frameRect.topLeft() + QPointF(cameraX, cameraY));
+        painter.scale(camera.scale, camera.scale);
+        painter.translate(offset);
+        painter.translate(-(shadow.width() - frameRect.width()) / 2.0,
+            -(shadow.height() - frameRect.height()) / 2.0);
+        painter.drawImage(0, 0, shadow);
+        painter.restore();
+    }
+
+    painter.save();
+    painter.setClipRect(QRectF(QPointF(0, 0), QSizeF(canvasSize)));
+    painter.translate(frameRect.topLeft() + QPointF(cameraX, cameraY));
+    painter.scale(camera.scale, camera.scale);
+
+    QPainterPath framePath;
+    framePath.addRoundedRect(QRectF(0.0, 0.0, frameRect.width(), frameRect.height()),
+        settings.radius, settings.radius);
+    painter.setClipPath(framePath, Qt::IntersectClip);
+    painter.fillPath(framePath, QColor(QStringLiteral("#101013")));
+
+    // layout.contentRect is in canvas coordinates; shift it into frame-local.
+    const QRectF contentRect(layout.contentRect.x() - frameRect.x(),
+        layout.contentRect.y() - frameRect.y(),
+        layout.contentRect.width(), layout.contentRect.height());
+    painter.drawImage(contentRect, source);
+
+    // Pointer overlay. It lives inside the camera-scaled frame, exactly like the
+    // preview, so the pointer grows with the zoom instead of staying a fixed size.
+    const CursorDefinition *definition = cursorAt(context.project, mediaTimeMs);
+    if (includeCursor && !settings.hideCursor && definition && !definition->image.isNull()
+        && cursor.alpha > 0.001) {
+        // The preview sizes the pointer in screen points and stretches the image
+        // to that box; here everything is in source pixels, so use the pixel
+        // metrics and let the canvas scale handle the rest.
+        const double baseWidth = std::max(2.0, definition->widthPx * fitScale * settings.cursorSizeFactor);
+        const double baseHeight = std::max(2.0, definition->heightPx * fitScale * settings.cursorSizeFactor);
+        const double hotspotX = definition->hotspotXPx / std::max(1.0, definition->widthPx);
+        const double hotspotY = definition->hotspotYPx / std::max(1.0, definition->heightPx);
+
+        painter.save();
+        painter.translate(contentRect.x() + cursor.x * fitScale, contentRect.y() + cursor.y * fitScale);
+        // Rotation and the click feedback both pivot on the hotspot.
+        painter.translate(-hotspotX * baseWidth, -hotspotY * baseHeight);
+        if (std::abs(cursor.rotationDeg) > 0.001)
+            painter.rotate(cursor.rotationDeg);
+        if (std::abs(cursor.scale - 1.0) > 0.001) {
+            painter.translate(hotspotX * baseWidth, hotspotY * baseHeight);
+            painter.scale(cursor.scale, cursor.scale);
+            painter.translate(-hotspotX * baseWidth, -hotspotY * baseHeight);
+        }
+        painter.setOpacity(std::clamp(cursor.alpha, 0.0, 1.0));
+        painter.drawImage(QRectF(0.0, 0.0, baseWidth, baseHeight), definition->image);
+        painter.restore();
+    }
+
+    // Inset border: drawn on the frame edge, inside the rounded corners.
+    if (settings.insetSize > 0.01) {
+        QColor insetColor = settings.insetColor;
+        insetColor.setAlphaF(static_cast<float>(std::clamp(settings.insetAlpha, 0.0, 1.0)));
+        QPen pen(insetColor);
+        pen.setWidthF(settings.insetSize);
+        painter.setPen(pen);
+        painter.setBrush(Qt::NoBrush);
+        const double half = settings.insetSize / 2.0;
+        const double radius = std::max(0.0, settings.radius - half);
+        painter.drawRoundedRect(QRectF(half, half, frameRect.width() - settings.insetSize,
+            frameRect.height() - settings.insetSize), radius, radius);
+    }
+    painter.restore();
+
+    painter.end();
+    return canvas;
+}
+
+// ---------------------------------------------------------------------------
+// Encoding
+// ---------------------------------------------------------------------------
+
+namespace {
+
+QString videoPath(const ProjectData &project) {
+    return project.directory + QLatin1Char('/') + project.videoFile;
+}
+
+// Index of the source frame that should be on screen at `mediaTimeMs`: the last
+// frame whose recorded media time is at or before it.
+qint64 frameIndexAt(const std::vector<double> &frameMediaMs, double mediaTimeMs) {
+    if (frameMediaMs.empty())
+        return -1;
+    const auto it = std::upper_bound(frameMediaMs.begin(), frameMediaMs.end(), mediaTimeMs);
+    if (it == frameMediaMs.begin())
+        return 0;
+    return std::distance(frameMediaMs.begin(), it) - 1;
+}
+
+} // namespace
+
+ComposeResult composeProject(const ComposeOptions &options, const ComposeProgress &progress) {
+    ComposeResult result;
+    result.outputPath = options.outputPath;
+
+    QString error;
+    ProjectData project = loadProject(options.projectDirectory, &error);
+    if (!project.valid) {
+        result.error = error;
+        return result;
+    }
+
+    ComposeContext context = makeComposeContext(project, options.backgroundRoot);
+    if (!context.valid) {
+        result.error = context.error;
+        return result;
+    }
+    if (!options.includeAutoZoom)
+        context.project.zoomRanges.clear();
+
+    const double startMs = std::max(0.0, options.startMs);
+    const double endMs = context.project.durationMs;
+    const int fps = std::clamp(options.fps, 1, 240);
+    qint64 totalFrames = static_cast<qint64>(std::llround((endMs - startMs) * fps / 1000.0));
+    if (options.maxOutputFrames > 0)
+        totalFrames = std::min<qint64>(totalFrames, options.maxOutputFrames);
+    if (totalFrames <= 0) {
+        result.error = QStringLiteral("输出帧数为零");
+        return result;
+    }
+
+    result.width = context.width();
+    result.height = context.height();
+    result.durationMs = endMs - startMs;
+    result.sourceFrames = static_cast<qint64>(context.project.frameMediaMs.size());
+
+    if (result.outputPath.isEmpty())
+        result.outputPath = context.project.directory + QStringLiteral("/composed.mp4");
+    const QString temporaryPath = result.outputPath + QStringLiteral(".part.mp4");
+
+    const Animation::DriverSettings driver =
+        Animation::driverSettingsFromMap(context.project.settings);
+    AnimationSequence sequence(context.project, driver.screenSpring, driver.cursor);
+
+    // --- decoder -----------------------------------------------------------
+    QProcess decoder;
+    decoder.setProcessChannelMode(QProcess::SeparateChannels);
+    QStringList decoderArgs{
+        QStringLiteral("-v"), QStringLiteral("error"),
+        QStringLiteral("-i"), videoPath(context.project),
+        QStringLiteral("-fps_mode"), QStringLiteral("passthrough"),
+        QStringLiteral("-f"), QStringLiteral("rawvideo"),
+        QStringLiteral("-pix_fmt"), QStringLiteral("bgra"),
+        QStringLiteral("-")
+    };
+    decoder.start(options.ffmpegPath, decoderArgs);
+    if (!decoder.waitForStarted(10000)) {
+        result.error = QStringLiteral("无法启动 ffmpeg 解码：") + decoder.errorString();
+        return result;
+    }
+
+    // --- encoder -----------------------------------------------------------
+    // Video arrives on stdin; the audio track is copied straight out of the
+    // recording so no re-encode touches it.
+    QProcess encoder;
+    QStringList encoderArgs{
+        QStringLiteral("-v"), QStringLiteral("error"),
+        QStringLiteral("-f"), QStringLiteral("rawvideo"),
+        QStringLiteral("-pix_fmt"), QStringLiteral("bgra"),
+        QStringLiteral("-s"), QStringLiteral("%1x%2").arg(result.width).arg(result.height),
+        QStringLiteral("-r"), QString::number(fps),
+        QStringLiteral("-i"), QStringLiteral("-")
+    };
+    if (options.includeAudio)
+        encoderArgs << QStringLiteral("-i") << videoPath(context.project);
+    encoderArgs << QStringLiteral("-map") << QStringLiteral("0:v:0");
+    if (options.includeAudio)
+        encoderArgs << QStringLiteral("-map") << QStringLiteral("1:a:0?");
+    encoderArgs << QStringLiteral("-c:v") << QStringLiteral("libx264")
+                << QStringLiteral("-preset") << QStringLiteral("veryfast")
+                << QStringLiteral("-crf") << QStringLiteral("18")
+                << QStringLiteral("-pix_fmt") << QStringLiteral("yuv420p")
+                << QStringLiteral("-movflags") << QStringLiteral("+faststart");
+    if (options.includeAudio)
+        encoderArgs << QStringLiteral("-c:a") << QStringLiteral("copy")
+                    << QStringLiteral("-shortest");
+    encoderArgs << QStringLiteral("-y") << temporaryPath;
+
+    encoder.start(options.ffmpegPath, encoderArgs);
+    if (!encoder.waitForStarted(10000)) {
+        decoder.kill();
+        decoder.waitForFinished(5000);
+        result.error = QStringLiteral("无法启动 ffmpeg 编码：") + encoder.errorString();
+        return result;
+    }
+
+    // --- compose loop ------------------------------------------------------
+    const qint64 bytesPerFrame = qint64(result.width) * result.height * 4;
+    QByteArray buffer;
+    buffer.resize(static_cast<int>(bytesPerFrame));
+    QImage sourceFrame;
+    qint64 sourceIndex = -1;
+    QString failure;
+
+    auto pullSourceFrame = [&]() -> bool {
+        qint64 read = 0;
+        while (read < bytesPerFrame) {
+            if (!decoder.waitForReadyRead(30000) && decoder.bytesAvailable() == 0) {
+                failure = QStringLiteral("解码原始视频时中断（已读 %1/%2 字节）")
+                    .arg(read).arg(bytesPerFrame);
+                return false;
+            }
+            const qint64 got = decoder.read(buffer.data() + read, bytesPerFrame - read);
+            if (got <= 0) {
+                failure = QStringLiteral("原始视频帧数少于时间轴记录（第 %1 帧）").arg(sourceIndex + 2);
+                return false;
+            }
+            read += got;
+        }
+        sourceFrame = QImage(reinterpret_cast<const uchar *>(buffer.constData()),
+            result.width, result.height, result.width * 4, QImage::Format_ARGB32_Premultiplied).copy();
+        ++sourceIndex;
+        return true;
+    };
+
+    for (qint64 frame = 0; frame < totalFrames; ++frame) {
+        const double mediaTimeMs = startMs + frame * 1000.0 / fps;
+        if (sourceFrame.isNull() || frameIndexAt(context.project.frameMediaMs, mediaTimeMs) > sourceIndex) {
+            if (!pullSourceFrame()) {
+                result.error = failure;
+                break;
+            }
+        }
+
+        const CameraPose camera = sequence.cameraAt(mediaTimeMs);
+        const CursorPose cursor = sequence.cursorAt(mediaTimeMs);
+        const QImage canvas = composeFrame(context, sourceFrame, camera, cursor, mediaTimeMs,
+            options.includeCursor);
+        if (canvas.isNull()) {
+            result.error = QStringLiteral("第 %1 帧合成失败").arg(frame);
+            break;
+        }
+
+        const qint64 written = encoder.write(
+            reinterpret_cast<const char *>(canvas.constBits()), bytesPerFrame);
+        if (written != bytesPerFrame) {
+            result.error = QStringLiteral("写入编码器失败（第 %1 帧）").arg(frame);
+            break;
+        }
+        ++result.writtenFrames;
+        if (progress && (frame % 60 == 0 || frame == totalFrames - 1))
+            progress(result.writtenFrames, totalFrames);
+        // Keep the decoder from racing ahead of the encoder.
+        if (!encoder.waitForBytesWritten(30000)) {
+            result.error = QStringLiteral("编码器无响应");
+            break;
+        }
+    }
+
+    // --- teardown ----------------------------------------------------------
+    if (result.error.isEmpty()) {
+        encoder.closeWriteChannel();
+        if (!encoder.waitForFinished(-1)) {
+            result.error = QStringLiteral("编码器未正常结束：") + encoder.errorString();
+        } else if (encoder.exitStatus() != QProcess::NormalExit || encoder.exitCode() != 0) {
+            result.error = QStringLiteral("ffmpeg 编码失败：")
+                + QString::fromUtf8(encoder.readAllStandardError()).trimmed();
+        }
+    } else {
+        encoder.kill();
+        encoder.waitForFinished(5000);
+    }
+    result.encoderLog = QString::fromUtf8(encoder.readAllStandardError()).trimmed();
+
+    decoder.closeReadChannel(QProcess::StandardOutput);
+    if (decoder.state() != QProcess::NotRunning) {
+        decoder.closeWriteChannel();
+        if (!decoder.waitForFinished(5000)) {
+            decoder.kill();
+            decoder.waitForFinished(5000);
+        }
+    }
+    result.decoderLog = QString::fromUtf8(decoder.readAllStandardError()).trimmed();
+
+    if (result.error.isEmpty()) {
+        if (!QFileInfo::exists(temporaryPath) || QFileInfo(temporaryPath).size() == 0) {
+            result.error = QStringLiteral("编码输出为空");
+        } else if (!QFile::remove(result.outputPath) && QFileInfo::exists(result.outputPath)) {
+            result.error = QStringLiteral("无法覆盖已有输出：") + result.outputPath;
+        } else if (!QFile::rename(temporaryPath, result.outputPath)) {
+            result.error = QStringLiteral("无法写入输出：") + result.outputPath;
+        } else {
+            result.audioMuxed = options.includeAudio;
+            result.ok = true;
+        }
+    }
+    if (!result.ok)
+        QFile::remove(temporaryPath);
+    return result;
+}
+
+} // namespace Render

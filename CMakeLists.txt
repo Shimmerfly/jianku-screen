@@ -53,6 +53,11 @@ qt_add_executable(jianku-screen MACOSX_BUNDLE
 )
 
 include(CTest)
+# Optional: point the compositor test at a real recorded project directory so it
+# also exercises a genuine 100+ second timeline. Left empty by default because
+# recorded projects live in the user's Movies folder, not in the repository.
+set(JIANKU_SMOKE_PROJECT "" CACHE PATH
+    "Recorded .jianku project used by the compositor smoke test (optional)")
 if(BUILD_TESTING)
     add_executable(timeline-tests tests/TimelineTests.cpp
         src/animation/AutomaticZoom.cpp src/project/ProjectTimeline.cpp)
@@ -81,7 +86,37 @@ if(BUILD_TESTING)
     add_executable(canvas-layout-tests tests/CanvasLayoutTests.cpp src/render/CanvasLayout.cpp)
     target_link_libraries(canvas-layout-tests PRIVATE Qt6::Core)
     add_test(NAME canvas-layout COMMAND canvas-layout-tests)
+
+    add_executable(compositor-tests tests/CompositorTests.cpp
+        src/render/ProjectCompositor.cpp src/render/CanvasLayout.cpp
+        src/animation/AnimationSettings.cpp src/animation/AutoFocusEngine.cpp
+        src/animation/AutomaticZoom.cpp src/animation/CursorEngine.cpp
+        src/animation/SpringSolver.cpp)
+    target_link_libraries(compositor-tests PRIVATE Qt6::Core Qt6::Gui)
+    target_compile_definitions(compositor-tests PRIVATE
+        JIANKU_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+        JIANKU_SMOKE_PROJECT="${JIANKU_SMOKE_PROJECT}")
+    add_test(NAME compositor COMMAND compositor-tests)
 endif()
+
+# Offline compositor: replays a recorded project through the shared animation
+# engine and canvas layout and writes a composited MP4.
+qt_add_executable(jianku-compose
+    src/render/ComposeMain.cpp
+    src/render/ProjectCompositor.cpp
+    src/render/ProjectCompositor.h
+    src/render/CanvasLayout.cpp
+    src/render/CanvasLayout.h
+    src/animation/AnimationSettings.cpp
+    src/animation/AnimationSettings.h
+    src/animation/AutoFocusEngine.cpp
+    src/animation/AutomaticZoom.cpp
+    src/animation/CursorEngine.cpp
+    src/animation/SpringSolver.cpp
+)
+target_link_libraries(jianku-compose PRIVATE Qt6::Core Qt6::Gui)
+target_compile_definitions(jianku-compose PRIVATE
+    JIANKU_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
 set_source_files_properties(src/mac/MacCapture.mm src/mac/QuickScreenshot.mm
     src/mac/PointerEventRecorder.mm src/mac/MicrophoneRecorder.mm
