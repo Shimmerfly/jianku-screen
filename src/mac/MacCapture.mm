@@ -1,6 +1,7 @@
 #import "MacCapture.h"
 #import "MicrophoneRecorder.h"
 #import "PointerEventRecorder.h"
+#import "../capture/MediaClock.h"
 #import "../capture/VideoFrameStore.h"
 #include "../project/ProjectTimeline.h"
 
@@ -97,6 +98,17 @@ bool writeProject(const QString &directory, const QJsonObject &manifest) {
     qint64 pausedAccumNs;
     qint64 pauseStartHostNs;
     CMTime lastFrameTime;
+    // Media time actually handed to the writer for the newest frame. Recomputing
+    // it later via mediaTimeForSourceTime would subtract pauses accumulated
+    // after that frame and could move it backwards past already-written frames.
+    CMTime lastFrameMediaTime;
+    // Host time of the newest frame already folded past every completed pause.
+    // Subtracting it from the folded stop time yields the true tail length even
+    // when the stop happens while the recording is paused.
+    qint64 lastFrameFoldedHostNs;
+    // Extra tail media time appended at stop so a static source still plays up
+    // to the moment the user pressed stop.
+    qint64 mediaTailNs;
     qint64 firstDisplayHostNs;
     qint64 lastDisplayHostNs;
     qint64 frameCount;
@@ -186,6 +198,9 @@ bool writeProject(const QString &directory, const QJsonObject &manifest) {
         pauseStartHostNs = 0;
         firstFrameTime = kCMTimeInvalid;
         lastFrameTime = kCMTimeInvalid;
+        lastFrameMediaTime = kCMTimeInvalid;
+        lastFrameFoldedHostNs = 0;
+        mediaTailNs = 0;
         firstDisplayHostNs = lastDisplayHostNs = 0;
         frameCount = droppedFrameCount = 0;
         timelineHealthy = true;
@@ -223,9 +238,12 @@ bool writeProject(const QString &directory, const QJsonObject &manifest) {
         const qint64 now = timeNs(CMClockGetTime(CMClockGetHostTimeClock()));
         const qint64 duration = std::max<qint64>(0, now - pauseStartHostNs);
         pausedAccumNs += duration;
-        NSMutableDictionary *last = [pauseRanges lastObject];
-        last[@"endHostTimeNs"] = QString::number(now).toNSString();
-        last[@"durationNs"] = QString::number(duration).toNSString();
+        NSDictionary *last = [pauseRanges lastObject];
+        NSMutableDictionary *updated = [last mutableCopy];
+        updated[@"endHostTimeNs"] = QString::number(now).toNSString();
+        updated[@"durationNs"] = QString::number(duration).toNSString();
+        [pauseRanges removeLastObject];
+        [pauseRanges addObject:updated];
         paused = NO;
     });
 }
@@ -241,16 +259,17 @@ bool writeProject(const QString &directory, const QJsonObject &manifest) {
             {"endHostTimeNs", end ? QString::fromNSString(end) : QString()},
             {"durationNs", duration ? QString::fromNSString(duration) : QString()}});
     }
-    const CMTime mediaEnd = CMTIME_IS_VALID(lastFrameTime)
-        ? [self mediaTimeForSourceTime:lastFrameTime] : kCMTimeInvalid;
-    const CMTime mediaFirst = CMTIME_IS_VALID(firstFrameTime)
-        ? [self mediaTimeForSourceTime:firstFrameTime] : kCMTimeInvalid;
+    // The newest frame's media time was captured when it was written; do not
+    // recompute it here, because every pause completed since then would be
+    // subtracted a second time. lastFrameMediaTime is already relative to
+    // firstFrameTime, so it is the duration by itself.
+    const CMTime mediaEnd = CMTIME_IS_VALID(lastFrameMediaTime)
+        ? CMTimeAdd(lastFrameMediaTime, CMTimeMake(mediaTailNs, 1000000000)) : kCMTimeInvalid;
     return {{"file", "raw.mp4"}, {"frames", "video-frames.jsonl"}, {"cursorBakedIn", false},
         {"firstSourcePtsNs", CMTIME_IS_VALID(firstFrameTime) ? QString::number(timeNs(firstFrameTime)) : QString()},
         {"mediaZeroHostTimeNs", QString::number(firstDisplayHostNs)},
         {"lastDisplayHostTimeNs", QString::number(lastDisplayHostNs)},
-        {"durationNs", CMTIME_IS_VALID(mediaEnd)
-            ? QString::number(timeNs(CMTimeSubtract(mediaEnd, mediaFirst)) + 16666667) : QString()},
+        {"durationNs", CMTIME_IS_VALID(mediaEnd) ? QString::number(timeNs(mediaEnd)) : QString()},
         {"frameCount", frameCount}, {"droppedFrameCount", droppedFrameCount},
         {"pauseRanges", pauses}, {"pausedTotalNs", QString::number(pausedAccumNs)},
         {"timelineWriteError", !timelineHealthy ? QStringLiteral("视频帧时间记录写入失败") : QString()}};
@@ -274,20 +293,33 @@ bool writeProject(const QString &directory, const QJsonObject &manifest) {
             return;
         }
         // Extend a static source to the actual stop time without inventing motion.
+        // lastFrameMediaTime is the last PTS already written; taking the tail
+        // from it (instead of recomputing through the source clock after a pause
+        // was folded in) keeps every appended PTS strictly increasing.
         const qint64 stopHostNs = timeNs(CMClockGetTime(CMClockGetHostTimeClock()));
-        if (paused) {
-            // Stopping while paused: the frozen interval is not part of the video.
+        const bool stoppedWhilePaused = paused;
+        if (stoppedWhilePaused) {
+            // Stopping while paused: the frozen interval is not part of the video,
+            // and the frame that was on screen is the last thing the source showed.
             const qint64 duration = std::max<qint64>(0, stopHostNs - pauseStartHostNs);
             pausedAccumNs += duration;
-            NSMutableDictionary *last = [pauseRanges lastObject];
-            last[@"endHostTimeNs"] = QString::number(stopHostNs).toNSString();
-            last[@"durationNs"] = QString::number(duration).toNSString();
+            NSDictionary *last = [pauseRanges lastObject];
+            NSMutableDictionary *updated = [last mutableCopy];
+            updated[@"endHostTimeNs"] = QString::number(stopHostNs).toNSString();
+            updated[@"durationNs"] = QString::number(duration).toNSString();
+            [pauseRanges removeLastObject];
+            [pauseRanges addObject:updated];
             paused = NO;
         }
-        const CMTime lastMediaTime = [self mediaTimeForSourceTime:lastFrameTime];
-        const qint64 liveNs = std::max<qint64>(0, stopHostNs - lastDisplayHostNs);
-        const CMTime endTime = CMTimeAdd(lastMediaTime, CMTimeMake(liveNs, 1000000000));
-        const CMTime finalFrameTime = CMTimeSubtract(endTime, CMTimeMake(1, 60));
+        const CMTime lastMediaTime = CMTIME_IS_VALID(lastFrameMediaTime)
+            ? lastFrameMediaTime : kCMTimeZero;
+        // While paused nothing new was shown, so there is no tail to extend.
+        const qint64 tailNs = Capture::tailNsAtStop(stopHostNs, pausedAccumNs,
+            lastFrameFoldedHostNs, stoppedWhilePaused);
+        mediaTailNs = tailNs;
+        const CMTime endTime = CMTimeAdd(lastMediaTime, CMTimeMake(tailNs, 1000000000));
+        const CMTime finalFrameTime = CMTimeMake(
+            Capture::finalFrameMediaNs(timeNs(lastMediaTime), tailNs, 16666667), 1000000000);
         if (lastRecordedFrame && videoInput.readyForMoreMediaData
             && CMTimeCompare(finalFrameTime, lastMediaTime) > 0
             && [videoAdaptor appendPixelBuffer:lastRecordedFrame
@@ -429,6 +461,8 @@ bool writeProject(const QString &directory, const QJsonObject &manifest) {
             if (CMTimeCompare(relativeTime, kCMTimeZero) >= 0) {
                 if (!firstDisplayHostNs) firstDisplayHostNs = displayNs;
                 lastFrameTime = timestamp;
+                lastFrameMediaTime = relativeTime;
+                lastFrameFoldedHostNs = displayNs - pausedAccumNs;
                 lastDisplayHostNs = displayNs;
                 ++frameCount;
                 if (lastRecordedFrame) CVPixelBufferRelease(lastRecordedFrame);

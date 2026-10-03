@@ -70,6 +70,10 @@ if(BUILD_TESTING)
         src/animation/AutoFocusEngine.cpp src/animation/AutomaticZoom.cpp)
     target_link_libraries(autofocus-tests PRIVATE Qt6::Core)
     add_test(NAME auto-focus COMMAND autofocus-tests)
+
+    add_executable(media-clock-tests tests/MediaClockTests.cpp src/capture/MediaClock.h)
+    target_link_libraries(media-clock-tests PRIVATE Qt6::Core)
+    add_test(NAME media-clock COMMAND media-clock-tests)
 endif()
 
 set_source_files_properties(src/mac/MacCapture.mm src/mac/QuickScreenshot.mm
