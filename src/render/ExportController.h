@@ -2,6 +2,8 @@
 
 #include "ProjectCompositor.h"
 
+#include "../project/EditTimeline.h"
+
 #include <QObject>
 #include <QString>
 #include <QVariantMap>
@@ -43,6 +45,10 @@ public:
     // finishes; an empty path disables exporting.
     Q_INVOKABLE void setProjectDirectory(const QString &directory);
 
+    // The edit timeline to export. The controller copies it at start() time, so an
+    // edit made during an export cannot change what is being written.
+    void setTimeline(const Project::EditTimeline &timeline) { timeline_ = timeline; }
+
     // Starts an export. `outputPath` may be empty to use the default.
     // `includeCursor` / `includeAutoZoom` / `includeAudio` map to the CLI flags;
     // `includeMicrophone` mixes in microphone.m4a when the project has one.
@@ -67,6 +73,7 @@ private:
     void applyResult(const ComposeResult &result);
 
     QString projectDirectory_;
+    Project::EditTimeline timeline_;
     QString defaultOutputPath_;
     QString outputPath_;
     QString status_;

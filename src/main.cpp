@@ -5,6 +5,7 @@
 #include "mac/MacWindowStyle.h"
 #include "render/CanvasPreview.h"
 #include "render/ExportController.h"
+#include "render/TimelineController.h"
 #include "render/VideoSurface.h"
 #include "settings/BackgroundLibrary.h"
 #include "settings/ScreenList.h"
@@ -41,6 +42,7 @@ int main(int argc, char *argv[]) {
     GlobalHotkey hotkey;
     Render::ExportController exporter;
     Render::CanvasPreview canvasPreview;
+    Render::TimelineController timeline;
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("capture"), &capture);
     engine.rootContext()->setContextProperty(QStringLiteral("settings"), &settings);
@@ -53,11 +55,23 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty(QStringLiteral("hotkey"), &hotkey);
     engine.rootContext()->setContextProperty(QStringLiteral("exporter"), &exporter);
     engine.rootContext()->setContextProperty(QStringLiteral("canvasPreview"), &canvasPreview);
-    // The exporter always targets the project the user just recorded.
+    engine.rootContext()->setContextProperty(QStringLiteral("timeline"), &timeline);
+    // The exporter always targets the project the user just recorded, and exports
+    // the edit timeline as it stands. The two are wired together here so an export
+    // started from the UI can never use a stale timeline: the controller pushes
+    // every change into the exporter.
     QObject::connect(&capture, &MacCapture::lastRecordingPathChanged, &exporter, [&] {
         exporter.setProjectDirectory(capture.lastProjectPath());
     });
+    QObject::connect(&capture, &MacCapture::lastRecordingPathChanged, &timeline, [&] {
+        timeline.load(capture.lastProjectPath());
+    });
+    QObject::connect(&timeline, &Render::TimelineController::timelineChanged, &exporter, [&] {
+        exporter.setTimeline(timeline.timeline());
+    });
     exporter.setProjectDirectory(capture.lastProjectPath());
+    timeline.load(capture.lastProjectPath());
+    exporter.setTimeline(timeline.timeline());
     engine.loadFromModule("Jianku.Screen", "Main");
     if (engine.rootObjects().isEmpty())
         return 1;

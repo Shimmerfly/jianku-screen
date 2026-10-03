@@ -67,6 +67,25 @@ bool EditTimeline::isIdentity() const {
         && std::abs(segments_.front().speed - 1.0) <= kEpsilon;
 }
 
+bool EditTimeline::playsWholeRecording() const {
+    if (!valid_)
+        return false;
+    if (std::abs(segments_.front().sourceStartMs) > kEpsilon)
+        return false;
+    if (std::abs(segments_.back().sourceEndMs - sourceDurationMs_) > kEpsilon)
+        return false;
+    double expected = 0.0;
+    for (const Segment &segment : segments_) {
+        if (std::abs(segment.speed - 1.0) > kEpsilon)
+            return false;
+        // A gap means material was cut out, which is a change the viewer sees.
+        if (std::abs(segment.sourceStartMs - expected) > 1e-3)
+            return false;
+        expected = segment.sourceEndMs;
+    }
+    return true;
+}
+
 double EditTimeline::outputDurationMs() const {
     double total = 0.0;
     for (const Segment &segment : segments_)

@@ -82,6 +82,9 @@ bool ExportController::start(const QString &outputPath, bool includeCursor,
     // The strength factor is fps / 60 relative to the reference's 60 fps, so it
     // follows the export frame rate. Everything else stays as the project saved it.
     options.motionBlur.fps = options.fps;
+    // The edit timeline, when the UI has one. Without it the export is the whole
+    // recording in real time, which is exactly an identity timeline.
+    options.timeline = timeline_;
     options.shouldCancel = [this] { return cancelRequested_.load(); };
 
     const QString target = options.outputPath;

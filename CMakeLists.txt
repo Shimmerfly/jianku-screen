@@ -38,6 +38,8 @@ qt_add_executable(jianku-screen MACOSX_BUNDLE
     src/render/CanvasRenderer.h
     src/render/CanvasPreview.cpp
     src/render/CanvasPreview.h
+    src/render/TimelineController.cpp
+    src/render/TimelineController.h
     src/render/ExportController.cpp
     src/render/ExportController.h
     src/animation/AnimationSettings.cpp
@@ -137,6 +139,18 @@ if(BUILD_TESTING)
         JIANKU_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
         JIANKU_SMOKE_PROJECT="${JIANKU_SMOKE_PROJECT}")
     add_test(NAME compositor COMMAND compositor-tests)
+
+    add_executable(timeline-controller-tests tests/TimelineControllerTests.cpp
+        src/render/TimelineController.cpp src/render/ProjectCompositor.cpp
+        src/project/EditTimeline.cpp src/render/CanvasLayout.cpp
+        src/render/CanvasRenderer.cpp src/render/MotionBlur.cpp
+        src/animation/AnimationSettings.cpp src/animation/AutoFocusEngine.cpp
+        src/animation/AutomaticZoom.cpp src/animation/CursorEngine.cpp
+        src/animation/SpringSolver.cpp)
+    target_link_libraries(timeline-controller-tests PRIVATE Qt6::Core Qt6::Gui)
+    target_compile_definitions(timeline-controller-tests PRIVATE
+        JIANKU_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME timeline-controller COMMAND timeline-controller-tests)
 
     add_executable(export-controller-tests tests/ExportControllerTests.cpp
         src/render/ExportController.cpp src/render/ProjectCompositor.cpp

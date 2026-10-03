@@ -41,7 +41,14 @@ public:
     QString error() const { return error_; }
     double sourceDurationMs() const { return sourceDurationMs_; }
     const std::vector<Segment> &segments() const { return segments_; }
+    // True when this is one segment covering the whole recording at real time.
     bool isIdentity() const;
+    // True when the timeline *plays* the whole recording in real time, even if it
+    // has been split into several segments. This is the question the UI asks to
+    // decide whether an export will differ from the recording: a split alone moves
+    // no content, so it is not an edit the viewer would notice, while still being a
+    // step worth undoing.
+    bool playsWholeRecording() const;
 
     // Total output length: the sum of every segment's output length.
     double outputDurationMs() const;
