@@ -59,9 +59,21 @@ int main(int argc, char *argv[]) {
         QStringLiteral("只合成前 N 帧，用于冒烟验证"), QStringLiteral("n"));
     const QCommandLineOption startOption(QStringLiteral("start-ms"),
         QStringLiteral("从第几毫秒开始合成"), QStringLiteral("ms"), QStringLiteral("0"));
+    // Edit timeline. Without any of these the export is the whole recording in real
+    // time; these are the non-destructive equivalents of the editor's operations,
+    // so a cut can be verified from the command line before the UI exists.
+    const QCommandLineOption trimFromOption(QStringLiteral("trim-from"),
+        QStringLiteral("裁掉开头这么多毫秒"), QStringLiteral("ms"));
+    const QCommandLineOption trimToOption(QStringLiteral("trim-to"),
+        QStringLiteral("只保留到这么多毫秒（输出时间）"), QStringLiteral("ms"));
+    const QCommandLineOption cutOption(QStringLiteral("cut"),
+        QStringLiteral("删掉一段输出时间，格式 起:止（毫秒）"), QStringLiteral("from:to"));
+    const QCommandLineOption speedOption(QStringLiteral("speed"),
+        QStringLiteral("对一段输出时间变速，格式 起:止:倍率"), QStringLiteral("from:to:rate"));
     parser.addOptions({outputOption, fpsOption, backgroundOption, ffmpegOption, noCursorOption,
         noZoomOption, noAudioOption, noMicrophoneOption, blurOption, blurCursorOption,
-        blurMoveOption, blurZoomOption, framesOption, startOption});
+        blurMoveOption, blurZoomOption, framesOption, startOption, trimFromOption, trimToOption,
+        cutOption, speedOption});
     parser.process(app);
 
     const QStringList positional = parser.positionalArguments();
@@ -110,6 +122,63 @@ int main(int argc, char *argv[]) {
     // export frame rate decides it rather than a project setting.
     options.motionBlur.fps = fps;
 
+    // Edit operations, applied by the compositor once it knows how long the
+    // recording is. Doing it there keeps the CLI from having to load the project
+    // twice, and keeps the ordering rule in one place.
+    auto numberPair = [](const QString &value, double *first, double *second) {
+        const QStringList parts = value.split(QLatin1Char(':'));
+        if (parts.size() != 2)
+            return false;
+        bool okFirst = false, okSecond = false;
+        *first = parts[0].toDouble(&okFirst);
+        *second = parts[1].toDouble(&okSecond);
+        return okFirst && okSecond;
+    };
+
+    if (parser.isSet(speedOption)) {
+        const QStringList parts = parser.value(speedOption).split(QLatin1Char(':'));
+        bool okFrom = false, okTo = false, okRate = false;
+        double from = 0.0, to = 0.0, rate = 0.0;
+        if (parts.size() == 3) {
+            from = parts[0].toDouble(&okFrom);
+            to = parts[1].toDouble(&okTo);
+            rate = parts[2].toDouble(&okRate);
+        }
+        if (!okFrom || !okTo || !okRate || !(rate > 0.0) || to <= from) {
+            QTextStream(stderr) << "无效的 --speed（应为 起:止:倍率，倍率大于 0）："
+                                << parser.value(speedOption) << '\n';
+            return 2;
+        }
+        options.edits.push_back({Render::EditKind::Speed, from, to, rate});
+    }
+    if (parser.isSet(cutOption)) {
+        double from = 0.0, to = 0.0;
+        if (!numberPair(parser.value(cutOption), &from, &to) || to <= from || from < 0.0) {
+            QTextStream(stderr) << "无效的 --cut（应为 起:止，起小于止）："
+                                << parser.value(cutOption) << '\n';
+            return 2;
+        }
+        options.edits.push_back({Render::EditKind::Cut, from, to, 0.0});
+    }
+    if (parser.isSet(trimFromOption)) {
+        bool ok = false;
+        const double value = parser.value(trimFromOption).toDouble(&ok);
+        if (!ok || value < 0.0) {
+            QTextStream(stderr) << "无效的 --trim-from：" << parser.value(trimFromOption) << '\n';
+            return 2;
+        }
+        options.edits.push_back({Render::EditKind::TrimStart, value, 0.0, 0.0});
+    }
+    if (parser.isSet(trimToOption)) {
+        bool ok = false;
+        const double value = parser.value(trimToOption).toDouble(&ok);
+        if (!ok || value <= 0.0) {
+            QTextStream(stderr) << "无效的 --trim-to：" << parser.value(trimToOption) << '\n';
+            return 2;
+        }
+        options.edits.push_back({Render::EditKind::TrimEnd, value, 0.0, 0.0});
+    }
+
     QElapsedTimer timer;
     timer.start();
     qint64 lastReported = -1;
@@ -139,7 +208,11 @@ int main(int argc, char *argv[]) {
         << "画布：" << result.width << "×" << result.height << '\n'
         << "帧数：" << result.writtenFrames << "（成片回读 " << result.encodedFrames
         << "，源时间轴 " << result.sourceFrames << " 帧）\n"
-        << "时长：" << QString::number(result.durationMs / 1000.0, 'f', 3) << " 秒\n"
+        << "时长：" << QString::number(result.durationMs / 1000.0, 'f', 3) << " 秒"
+        << (result.timelineIdentity
+               ? QString()
+               : QStringLiteral("（剪辑后，%1 段）").arg(result.timelineSegments))
+        << '\n' 
         << "音轨：" << (result.microphoneMuxed
                ? QStringLiteral("系统声音 + 麦克风（已按 %1 ms 对齐后混音）")
                      .arg(QString::number(result.microphoneDelayMs, 'f', 1))

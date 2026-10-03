@@ -26,6 +26,8 @@ qt_add_executable(jianku-screen MACOSX_BUNDLE
     src/animation/AnimationSettings.cpp
     src/animation/AnimationSettings.h
     src/project/ProjectTimeline.cpp
+    src/project/EditTimeline.cpp
+    src/project/EditTimeline.h
     src/render/ProjectCompositor.cpp
     src/render/ProjectCompositor.h
     src/render/MotionBlur.cpp
@@ -115,12 +117,16 @@ if(BUILD_TESTING)
         JIANKU_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME canvas-renderer COMMAND canvas-renderer-tests)
 
+    add_executable(edit-timeline-tests tests/EditTimelineTests.cpp src/project/EditTimeline.cpp)
+    target_link_libraries(edit-timeline-tests PRIVATE Qt6::Core)
+    add_test(NAME edit-timeline COMMAND edit-timeline-tests)
+
     add_executable(motion-blur-tests tests/MotionBlurTests.cpp src/render/MotionBlur.cpp)
     target_link_libraries(motion-blur-tests PRIVATE Qt6::Core Qt6::Gui)
     add_test(NAME motion-blur COMMAND motion-blur-tests)
 
     add_executable(compositor-tests tests/CompositorTests.cpp
-        src/render/ProjectCompositor.cpp src/render/CanvasLayout.cpp
+        src/render/ProjectCompositor.cpp src/project/EditTimeline.cpp src/render/CanvasLayout.cpp
         src/render/CanvasRenderer.cpp
         src/animation/AnimationSettings.cpp src/animation/AutoFocusEngine.cpp
         src/animation/AutomaticZoom.cpp src/animation/CursorEngine.cpp
@@ -134,6 +140,7 @@ if(BUILD_TESTING)
 
     add_executable(export-controller-tests tests/ExportControllerTests.cpp
         src/render/ExportController.cpp src/render/ProjectCompositor.cpp
+        src/project/EditTimeline.cpp
         src/render/CanvasLayout.cpp src/render/CanvasRenderer.cpp src/animation/AnimationSettings.cpp
         src/animation/AutoFocusEngine.cpp src/animation/AutomaticZoom.cpp
         src/animation/CursorEngine.cpp src/animation/SpringSolver.cpp
@@ -151,6 +158,8 @@ qt_add_executable(jianku-compose
     src/render/ComposeMain.cpp
     src/render/ProjectCompositor.cpp
     src/render/ProjectCompositor.h
+    src/project/EditTimeline.cpp
+    src/project/EditTimeline.h
     src/render/MotionBlur.cpp
     src/render/MotionBlur.h
     src/render/CanvasLayout.cpp

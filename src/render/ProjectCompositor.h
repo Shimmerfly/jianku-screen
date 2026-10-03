@@ -7,6 +7,7 @@
 #include "../animation/CursorEngine.h"
 #include "../animation/InputEvent.h"
 #include "../animation/SpringSolver.h"
+#include "../project/EditTimeline.h"
 
 #include <QColor>
 #include <QHash>
@@ -168,6 +169,8 @@ struct BlurPlan {
 struct ComposeContext {
     ProjectData project;
     ComposerSettings settings;
+    // The output clock. Every source time the compositor asks for goes through it.
+    Project::EditTimeline timeline;
     // Background, layout, shadow and the resolved canvas size. Shared with the
     // preview and the screenshot, so all three draw the same packaging.
     CanvasPlan canvasPlan;
@@ -237,6 +240,16 @@ private:
 // Encoding
 // ---------------------------------------------------------------------------
 
+// One editing step. `value` is the speed for Speed and unused otherwise.
+enum class EditKind { Speed, Cut, TrimStart, TrimEnd };
+
+struct EditOperation {
+    EditKind kind = EditKind::Cut;
+    double fromMs = 0.0;
+    double toMs = 0.0;
+    double value = 0.0;
+};
+
 struct ComposeOptions {
     QString projectDirectory;
     QString outputPath;          // empty = <project>/composed.mp4
@@ -253,6 +266,16 @@ struct ComposeOptions {
     // what the project saved, so the CLI can compare a clip with and without blur
     // without editing the project.
     MotionBlurSettings motionBlur;
+    // Non-destructive edit timeline. An invalid (empty) timeline means "the whole
+    // recording, real time". When set, the output clock is the timeline's, and every
+    // source time handed to the animation engines comes from it — picture, pointer,
+    // camera and audio all have to agree, or a cut clip ends up with its clicks in
+    // the wrong places.
+    Project::EditTimeline timeline;
+    // Convenience form: edit operations applied to the whole recording inside
+    // composeProject, in a fixed order (speed, then cuts, then trims). Ignored when
+    // `timeline` is already valid.
+    std::vector<EditOperation> edits;
     // Mix levels, applied only on the microphone path (the system-only path is a
     // stream copy and stays untouched).
     double systemAudioVolume = 1.0;
@@ -280,6 +303,12 @@ struct ComposeResult {
     int width = 0;
     int height = 0;
     double durationMs = 0.0;
+    // How many segments the edit timeline had.
+    qint64 timelineSegments = 0;
+    // False when the timeline is no longer the identity — a trimmed recording has
+    // a single segment too, so the segment count alone cannot say whether the
+    // output is the untouched recording.
+    bool timelineIdentity = true;
     bool audioMuxed = false;
     // True when microphone.m4a was mixed in, and the offset that was applied.
     bool microphoneMuxed = false;

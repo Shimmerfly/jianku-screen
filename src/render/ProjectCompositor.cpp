@@ -735,10 +735,61 @@ ComposeResult composeProject(const ComposeOptions &options, const ComposeProgres
     if (!options.includeAutoZoom)
         context.project.zoomRanges.clear();
 
-    const double startMs = std::max(0.0, options.startMs);
-    const double endMs = context.project.durationMs;
+    // The edit timeline defines the output clock. Without one the output is the
+    // whole recording in real time, which is the same thing expressed as a single
+    // segment — so there is only one code path here, not two.
+    Project::EditTimeline timeline = options.timeline;
+    if (!timeline.valid()) {
+        timeline = Project::EditTimeline::whole(context.project.durationMs);
+        // A fixed order, so the meaning of the operations does not depend on how
+        // they were typed: retime first (it only changes playback rate), then cut,
+        // then trim. Cuts and trims are expressed on the clock as it stands at that
+        // point in the sequence.
+        for (const EditOperation &edit : options.edits) {
+            switch (edit.kind) {
+            case EditKind::Speed:
+                if (!timeline.setSpeed(edit.fromMs, edit.toMs, edit.value)) {
+                    result.error = QStringLiteral("变速失败（%1..%2 ms，%3×）：%4")
+                        .arg(edit.fromMs).arg(edit.toMs).arg(edit.value).arg(timeline.error());
+                    return result;
+                }
+                break;
+            case EditKind::Cut:
+                if (!timeline.remove(edit.fromMs, edit.toMs)) {
+                    result.error = QStringLiteral("删除区间失败（%1..%2 ms）：%3")
+                        .arg(edit.fromMs).arg(edit.toMs).arg(timeline.error());
+                    return result;
+                }
+                break;
+            case EditKind::TrimStart:
+                if (!timeline.trimStart(edit.fromMs)) {
+                    result.error = QStringLiteral("裁掉开头失败（%1 ms）：%2")
+                        .arg(edit.fromMs).arg(timeline.error());
+                    return result;
+                }
+                break;
+            case EditKind::TrimEnd:
+                if (!timeline.trimEnd(edit.toMs)) {
+                    result.error = QStringLiteral("裁掉结尾失败（%1 ms）：%2")
+                        .arg(edit.toMs).arg(timeline.error());
+                    return result;
+                }
+                break;
+            }
+        }
+    }
+    if (!timeline.valid()) {
+        result.error = timeline.error();
+        return result;
+    }
+    context.timeline = timeline;
+
+    const double outputDuration = timeline.outputDurationMs();
+    // `startMs` is an output-time offset: it exists so a smoke test can render a
+    // few seconds out of the middle without decoding from the beginning.
+    const double startMs = std::clamp(options.startMs, 0.0, std::max(0.0, outputDuration - 1.0));
     const int fps = std::clamp(options.fps, 1, 240);
-    qint64 totalFrames = static_cast<qint64>(std::llround((endMs - startMs) * fps / 1000.0));
+    qint64 totalFrames = static_cast<qint64>(std::llround((outputDuration - startMs) * fps / 1000.0));
     if (options.maxOutputFrames > 0)
         totalFrames = std::min<qint64>(totalFrames, options.maxOutputFrames);
     if (totalFrames <= 0) {
@@ -748,8 +799,10 @@ ComposeResult composeProject(const ComposeOptions &options, const ComposeProgres
 
     result.width = context.width();
     result.height = context.height();
-    result.durationMs = endMs - startMs;
+    result.durationMs = outputDuration - startMs;
     result.sourceFrames = static_cast<qint64>(context.project.frameMediaMs.size());
+    result.timelineSegments = static_cast<qint64>(timeline.segments().size());
+    result.timelineIdentity = timeline.isIdentity();
 
     if (result.outputPath.isEmpty())
         result.outputPath = context.project.directory + QStringLiteral("/composed.mp4");
@@ -927,13 +980,23 @@ ComposeResult composeProject(const ComposeOptions &options, const ComposeProgres
             result.cancelled = true;
             break;
         }
-        const double mediaTimeMs = startMs + frame * 1000.0 / fps;
-        if (sourceFrame.isNull() || frameIndexAt(context.project.frameMediaMs, mediaTimeMs) > sourceIndex) {
+        // Output clock → media clock. The source time is non-decreasing across the
+        // whole output timeline (segments stay in recording order), so the decoder
+        // only ever has to move forward and never seeks.
+        const double outputMs = startMs + frame * 1000.0 / fps;
+        const double mediaTimeMs = timeline.sourceTimeAt(outputMs);
+        const qint64 wantedSource = frameIndexAt(context.project.frameMediaMs, mediaTimeMs);
+        // A cut can skip source frames ahead; a slow-down repeats the same one. Only
+        // moving backwards is impossible, because segments stay in recording order —
+        // so the decoder never has to seek.
+        while (sourceIndex < wantedSource) {
             if (!pullSourceFrame()) {
                 result.error = failure;
                 break;
             }
         }
+        if (!result.error.isEmpty())
+            break;
 
         const CameraPose camera = sequence.cameraAt(mediaTimeMs);
         const CursorPose cursor = sequence.cursorAt(mediaTimeMs);
