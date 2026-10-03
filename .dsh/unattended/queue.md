@@ -5,7 +5,7 @@
 - 项目根：`/Users/moyingxz/Documents/Zzx/05_项目开发/Jianku Screen`
 - 验证命令：`cd build && cmake --build . -j8 && ctest --output-on-failure`
 - 运行日志：`.dsh/unattended/`
-- 上次更新：2026-10-04 04:45
+- 上次更新：2026-10-04 05:05
 
 ## 授权边界（本次无人值守）
 
@@ -13,14 +13,15 @@
 不做（等用户回来决定）：`git push`、改 CI、装系统级软件、**修改或删除用户的录制素材**。
 额外约束：本仓库为**私有本地仓库**，不做任何远端配置。
 
-## 现状（2026-10-04 04:45）
+## 现状（2026-10-04 05:05）
 
 - 构建：`cmake --build build -j8` 通过，warning 归零。
-- 测试：`ctest` **13/13** 通过（timeline-boundaries、spring-solver、cursor-engine、
+- 测试：`ctest` **15/15** 通过（timeline-boundaries、spring-solver、cursor-engine、
   auto-focus、media-clock、canvas-layout、capture-source、motion-blur、compositor、
-  export-controller、canvas-renderer、edit-timeline、timeline-controller）。
-- 版本历史：基线 `85af2cd`；此后 16 个提交，均在本地。
-- 本轮（04:20 前后）做了 6 件事，见 Q13–Q18。
+  export-controller、canvas-renderer、edit-timeline、timeline-controller、
+  timeline-geometry、timeline-strip）。
+- 版本历史：基线 `85af2cd`；此后 17 个提交，均在本地。
+- 本轮做了 7 件事，见 Q13–Q19。
 - 权限：approval=never / danger-full-access，无人值守期间无审批阻塞。
 - 工作区无其他执行体（Trae 停在 23:38，报的是模型侧 4054，不是代码错误）。
 
@@ -210,6 +211,28 @@ CLI 加 `--cut/--speed/--trim-from/--trim-to`，按固定顺序（先变速、�
 要不要开机扫描修复需要先定行为，留给用户。那个已损坏的文件救不回来（只解析出 371KB），
 也没有动它。
 
+### Q19 时间线没有界面，编辑只能用命令行 ✅
+结论：模型（Q16）与控制器（Q17）就绪后，把界面补上。
+`src/render/TimelineGeometry.{h,cpp}` 是新的纯函数层：位置↔时间、帧吸附、
+就近吸附到切点、刻度间隔与标签。**单独成层是因为这类算术错了不会崩，只会看起来
+有点不对**（播放头差一像素到不了尾、切点落在两帧之间、标签跳到看不懂），
+在 QML 里没法验，只能单测。
+`TimelineController` 增加播放头与标尺，每次编辑后夹一次播放头（输出变短后它会越界）。
+`ui/TimelineStrip.qml` 摆放标尺/片段条/播放头 + 切分/删除/撤销/重做/复原。
+导出帧率改成 `ExportController.frameRate` 可写属性，而不是另立一个设置键——
+播放头吸附用的帧率必须就是导出写出的帧率。
+
+**新增 timeline-strip：把 QML 也纳入 ctest。** QML 绑定坏了不会加载失败，
+只打一行 warning 然后渲染空白，这正是「时间线安静地什么都不显示」的成因；
+所以测试实例化真的组件、接真的控制器，并把任何 QML 告警当失败。
+搭这个测试踩到三个坑（都写进了注释）：测试进程导入不了应用的 QML 模块
+（qmldir 指向只存在于应用二进制里的资源路径），要自己编一份模块，
+而两个 QML 模块不能共用输出目录；`QT_RESOURCE_ALIAS` 必须在
+`qt_add_qml_module` 之前设；`QCoreApplication` 会让 QML 引擎段错误，
+必须 `QGuiApplication` 且设 Basic 样式。
+
+验证：`ctest` **15/15**；应用启动无 QML 报错。
+
 ## 待用户验证（无人值守期间做不了）
 
 按重要性排序。前两项直接影响能不能继续往下做。
@@ -225,8 +248,11 @@ CLI 加 `--cut/--speed/--trim-from/--trim-to`，按固定顺序（先变速、�
    这是最可能需要调的一个数，改动只在一处。
 3. **麦克风混音策略**：现在系统声音与麦克风等权相加（`normalize=0`）。
    是否该给麦克风更高权重、要不要提供两条独立音量，需要产品判断。
-4. **编辑器与时间线**的形态：模型与控制器已就绪（Q16/Q17），但**时间线 UI 还没做**。
-   动手前值得先定范围：是单轨（只有裁剪/删除/变速）还是要多轨/字幕轨。
+4. **剪辑交互的形态**：模型、控制器与界面都已在（Q16/Q17/Q19），当前是**单轨**：
+   标尺 + 片段条 + 播放头 + 切分/删除/变速/撤销重做。要不要多轨（字幕轨、摄像头轨、
+   音频轨）需要先定范围；单轨之外的都还没做。
+   另外剪切目前只有「删除播放头附近固定时长」，**拖拽片段边缘改变时长、拖拽片段
+   改变位置**都还没做，这是最可能需要先补的两项交互。
 5. **圆角的单位**：参考工程里存的是无单位整数（12），导出时才有像素尺寸。
    按画布像素是 12 px，按来源点是 ~13.7 px，按来源像素是 ~6.9 px，差一倍。
    官方文档说整屏来源取圆角 0，但本机 6 个工程全是整屏来源、圆角却是 9/0/21/14/7/12，
