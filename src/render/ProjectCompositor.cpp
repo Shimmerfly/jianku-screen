@@ -13,6 +13,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QProcess>
+#include <QStandardPaths>
 #include <algorithm>
 #include <cmath>
 
@@ -650,6 +651,35 @@ QImage composeFrame(const ComposeContext &context, const QImage &source,
 // Encoding
 // ---------------------------------------------------------------------------
 
+QString findFfmpeg() {
+    QStringList candidates{
+        QStringLiteral("/opt/homebrew/bin/ffmpeg"),
+        QStringLiteral("/usr/local/bin/ffmpeg"),
+        QStringLiteral("/usr/bin/ffmpeg")};
+    const QByteArray home = qgetenv("HOME");
+    if (!home.isEmpty())
+        candidates.prepend(QString::fromLocal8Bit(home) + QStringLiteral("/homebrew/bin/ffmpeg"));
+    for (const QString &candidate : candidates) {
+        if (QFileInfo(candidate).isExecutable())
+            return candidate;
+    }
+    const QString found = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+    return found.isEmpty() ? QStringLiteral("ffmpeg") : found;
+}
+
+QString findFfprobe(const QString &ffmpeg) {
+    if (!ffmpeg.isEmpty()) {
+        const QFileInfo info(ffmpeg);
+        if (info.isFile()) {
+            const QString sibling = info.absolutePath() + QStringLiteral("/ffprobe");
+            if (QFileInfo(sibling).isExecutable())
+                return sibling;
+        }
+    }
+    const QString found = QStandardPaths::findExecutable(QStringLiteral("ffprobe"));
+    return found.isEmpty() ? QStringLiteral("ffprobe") : found;
+}
+
 namespace {
 
 QString videoPath(const ProjectData &project) {
@@ -830,6 +860,11 @@ ComposeResult composeProject(const ComposeOptions &options, const ComposeProgres
     };
 
     for (qint64 frame = 0; frame < totalFrames; ++frame) {
+        if (options.shouldCancel && options.shouldCancel()) {
+            result.error = QStringLiteral("导出已取消");
+            result.cancelled = true;
+            break;
+        }
         const double mediaTimeMs = startMs + frame * 1000.0 / fps;
         if (sourceFrame.isNull() || frameIndexAt(context.project.frameMediaMs, mediaTimeMs) > sourceIndex) {
             if (!pullSourceFrame()) {
@@ -908,23 +943,15 @@ ComposeResult composeProject(const ComposeOptions &options, const ComposeProgres
     }
     if (!result.ok)
         QFile::remove(temporaryPath);
+    if (result.cancelled)
+        return result;
 
     // The video track is the authority: count the packets that actually landed in
     // the file so a trimmed or truncated export cannot pass as success. This is
     // what caught `-shortest` silently dropping the last frames.
     if (result.ok) {
-        const QFileInfo ffmpegInfo(options.ffmpegPath);
-        QString probePath = options.ffmpegPath;
-        if (ffmpegInfo.isFile()) {
-            // Prefer the ffprobe sitting next to the ffmpeg the caller pointed at.
-            QString sibling = ffmpegInfo.absolutePath() + QStringLiteral("/ffprobe");
-            if (QFileInfo::exists(sibling))
-                probePath = sibling;
-        } else {
-            probePath = QStringLiteral("ffprobe");
-        }
         QProcess probe;
-        probe.start(probePath, {QStringLiteral("-v"), QStringLiteral("error"),
+        probe.start(findFfprobe(options.ffmpegPath), {QStringLiteral("-v"), QStringLiteral("error"),
             QStringLiteral("-select_streams"), QStringLiteral("v:0"),
             QStringLiteral("-count_packets"),
             QStringLiteral("-show_entries"), QStringLiteral("stream=nb_read_packets"),

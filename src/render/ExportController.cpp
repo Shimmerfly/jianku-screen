@@ -1,0 +1,172 @@
+#include "ExportController.h"
+
+#include <QCoreApplication>
+#include <QDir>
+#include <QFileInfo>
+#include <QMetaObject>
+#include <QProcess>
+#include <QStandardPaths>
+#include <QThread>
+#include <QUrl>
+#include <atomic>
+
+namespace Render {
+namespace {
+
+// Where the built-in background library lives: the app bundle when running from
+// one, otherwise the source tree. Same two candidates the rest of the app uses.
+QString resolveBackgroundRoot() {
+    const QString bundled = QDir(QCoreApplication::applicationDirPath())
+        .filePath(QStringLiteral("../Resources/backgrounds"));
+    if (QDir(bundled).exists())
+        return QDir(bundled).absolutePath();
+    const QString source = QStringLiteral(JIANKU_SOURCE_DIR "/assets/backgrounds");
+    return QDir(source).exists() ? QDir(source).absolutePath() : QString();
+}
+
+} // namespace
+
+ExportController::ExportController(QObject *parent) : QObject(parent) {}
+
+ExportController::~ExportController() {
+    cancelRequested_.store(true);
+    if (thread_) {
+        thread_->quit();
+        thread_->wait(30000);
+    }
+}
+
+void ExportController::setProjectDirectory(const QString &directory) {
+    if (projectDirectory_ == directory)
+        return;
+    projectDirectory_ = directory;
+    const QString next = directory.isEmpty() ? QString()
+        : QDir(directory).filePath(QStringLiteral("composed.mp4"));
+    if (defaultOutputPath_ != next) {
+        defaultOutputPath_ = next;
+        emit defaultOutputPathChanged();
+    }
+}
+
+bool ExportController::start(const QString &outputPath, bool includeCursor,
+    bool includeAutoZoom, bool includeAudio) {
+    if (busy_) {
+        error_ = QStringLiteral("已有导出在进行中");
+        emit errorChanged();
+        return false;
+    }
+    if (projectDirectory_.isEmpty()
+        || !QFileInfo::exists(projectDirectory_ + QStringLiteral("/project.json"))) {
+        error_ = QStringLiteral("没有可导出的录制工程");
+        emit errorChanged();
+        return false;
+    }
+
+    error_.clear();
+    emit errorChanged();
+    progress_ = 0.0;
+    emit progressChanged();
+    busy_ = true;
+    emit busyChanged();
+    cancelRequested_.store(false);
+
+    ComposeOptions options;
+    options.projectDirectory = projectDirectory_;
+    options.outputPath = outputPath.isEmpty() ? defaultOutputPath_ : outputPath;
+    options.backgroundRoot = resolveBackgroundRoot();
+    options.ffmpegPath = findFfmpeg();
+    options.includeCursor = includeCursor;
+    options.includeAutoZoom = includeAutoZoom;
+    options.includeAudio = includeAudio;
+    options.shouldCancel = [this] { return cancelRequested_.load(); };
+
+    const QString target = options.outputPath;
+    if (outputPath_ != target) {
+        outputPath_ = target;
+        emit outputPathChanged();
+    }
+
+    status_ = QStringLiteral("正在准备导出…");
+    emit statusChanged();
+
+    // Each export gets its own thread; a finished QThread deletes itself.
+    auto *thread = QThread::create([this, options] {
+        const ComposeResult result = composeProject(options, [this](qint64 done, qint64 total) {
+            const double next = total > 0 ? double(done) / double(total) : 0.0;
+            QMetaObject::invokeMethod(this, [this, next, done, total] {
+                progress_ = next;
+                status_ = QStringLiteral("正在导出 %1/%2 帧").arg(done).arg(total);
+                emit progressChanged();
+                emit statusChanged();
+            }, Qt::QueuedConnection);
+        });
+        QMetaObject::invokeMethod(this, [this, result] { applyResult(result); },
+            Qt::QueuedConnection);
+    });
+    thread_ = thread;
+    thread->start();
+    return true;
+}
+
+void ExportController::applyResult(const ComposeResult &result) {
+    if (thread_) {
+        thread_->quit();
+        thread_->wait(5000);
+        thread_ = nullptr;
+    }
+    busy_ = false;
+    emit busyChanged();
+
+    if (result.cancelled) {
+        status_ = QStringLiteral("导出已取消");
+        emit statusChanged();
+        emit finished(false);
+        return;
+    }
+    if (!result.ok) {
+        error_ = result.error;
+        status_ = QStringLiteral("导出失败");
+        emit errorChanged();
+        emit statusChanged();
+        emit finished(false);
+        return;
+    }
+
+    progress_ = 1.0;
+    emit progressChanged();
+    status_ = QStringLiteral("导出完成：%1 帧 · %2×%3 · %4 秒")
+        .arg(result.encodedFrames > 0 ? result.encodedFrames : result.writtenFrames)
+        .arg(result.width)
+        .arg(result.height)
+        .arg(QString::number(result.durationMs / 1000.0, 'f', 1));
+    emit statusChanged();
+    emit finished(true);
+}
+
+void ExportController::cancel() {
+    if (!busy_)
+        return;
+    cancelRequested_.store(true);
+    status_ = QStringLiteral("正在取消导出…");
+    emit statusChanged();
+}
+
+void ExportController::revealOutput() const {
+    if (outputPath_.isEmpty())
+        return;
+    QProcess::startDetached(QStringLiteral("/usr/bin/open"),
+        {QStringLiteral("-R"), outputPath_});
+}
+
+void ExportController::reset() {
+    if (busy_)
+        return;
+    status_.clear();
+    error_.clear();
+    progress_ = 0.0;
+    emit statusChanged();
+    emit errorChanged();
+    emit progressChanged();
+}
+
+} // namespace Render

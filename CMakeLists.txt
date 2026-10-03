@@ -26,6 +26,14 @@ qt_add_executable(jianku-screen MACOSX_BUNDLE
     src/animation/AnimationSettings.cpp
     src/animation/AnimationSettings.h
     src/project/ProjectTimeline.cpp
+    src/render/ProjectCompositor.cpp
+    src/render/ProjectCompositor.h
+    src/render/CanvasLayout.cpp
+    src/render/CanvasLayout.h
+    src/render/ExportController.cpp
+    src/render/ExportController.h
+    src/animation/AnimationSettings.cpp
+    src/animation/AnimationSettings.h
     src/capture/VideoFrameStore.cpp
     src/capture/VideoFrameStore.h
     src/settings/SettingsStore.cpp
@@ -97,6 +105,17 @@ if(BUILD_TESTING)
         JIANKU_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
         JIANKU_SMOKE_PROJECT="${JIANKU_SMOKE_PROJECT}")
     add_test(NAME compositor COMMAND compositor-tests)
+
+    add_executable(export-controller-tests tests/ExportControllerTests.cpp
+        src/render/ExportController.cpp src/render/ProjectCompositor.cpp
+        src/render/CanvasLayout.cpp src/animation/AnimationSettings.cpp
+        src/animation/AutoFocusEngine.cpp src/animation/AutomaticZoom.cpp
+        src/animation/CursorEngine.cpp src/animation/SpringSolver.cpp)
+    target_link_libraries(export-controller-tests PRIVATE Qt6::Core Qt6::Gui)
+    target_compile_definitions(export-controller-tests PRIVATE
+        JIANKU_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME export-controller COMMAND export-controller-tests)
+    set_tests_properties(export-controller PROPERTIES TIMEOUT 300)
 endif()
 
 # Offline compositor: replays a recorded project through the shared animation

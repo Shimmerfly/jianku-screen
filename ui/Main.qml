@@ -131,6 +131,13 @@ ApplicationWindow {
     }
 
     Connections {
+        target: exporter
+        function onFinished(ok) {
+            if (ok) exporter.revealOutput()
+        }
+    }
+
+    Connections {
         target: capture
         function onRunningChanged() {
             if (capture.running && root.openPresentationWhenReady) {
@@ -244,6 +251,23 @@ ApplicationWindow {
                     onClicked: screenshot.capture(settings.current)
                 }
                 UiButton {
+                    // Export the recording through the offline compositor: this is
+                    // the only path that puts the smooth pointer and the camera
+                    // into the finished file.
+                    implicitWidth: 78
+                    text: exporter.busy ? "取消导出" : "导出成片"
+                    tone: "quiet"
+                    enabled: exporter.busy || exporter.defaultOutputPath.length > 0
+                    onClicked: {
+                        if (exporter.busy) exporter.cancel()
+                        else {
+                            exporter.reset()
+                            exporter.start(exporter.defaultOutputPath, true,
+                                !!settings.current.autoZoom, true)
+                        }
+                    }
+                }
+                UiButton {
                     visible: root.mode === "present"
                     implicitWidth: 92
                     text: "观众窗口"
@@ -321,12 +345,33 @@ ApplicationWindow {
                     anchors.right: parent.right
                     anchors.bottom: parent.bottom
                     anchors.margins: 16
-                    text: capture.recordingStatus.length > 0 ? capture.recordingStatus : capture.status
-                    color: Theme.textFaint
+                    text: {
+                        if (exporter.error.length > 0)
+                            return "导出失败：" + exporter.error
+                        if (exporter.status.length > 0)
+                            return exporter.status
+                        return capture.recordingStatus.length > 0 ? capture.recordingStatus : capture.status
+                    }
+                    color: exporter.error.length > 0 ? Theme.danger : Theme.textFaint
                     font.pixelSize: 11
                     elide: Text.ElideMiddle
                     width: Math.min(implicitWidth, parent.width - 40)
                     horizontalAlignment: Text.AlignRight
+                }
+
+                // Export progress: a thin bar along the bottom edge of the preview.
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    height: 2
+                    visible: exporter.busy
+                    color: Theme.stroke
+                    Rectangle {
+                        height: parent.height
+                        width: parent.width * Math.max(0, Math.min(1, exporter.progress))
+                        color: Theme.accent
+                    }
                 }
             }
         }

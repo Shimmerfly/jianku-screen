@@ -181,10 +181,16 @@ struct ComposeOptions {
     bool includeAudio = true;
     int maxOutputFrames = 0;     // 0 = the whole clip (used by smoke tests)
     double startMs = 0.0;
+    // Polled once per frame. Returning true stops the export and leaves the
+    // partial file on disk as .part.mp4 so the work can be inspected.
+    std::function<bool()> shouldCancel;
 };
 
 struct ComposeResult {
     bool ok = false;
+    // True when `shouldCancel` stopped the run. The caller must not report this
+    // as a failure; the user asked for it.
+    bool cancelled = false;
     QString error;
     QString outputPath;
     qint64 sourceFrames = 0;
@@ -203,6 +209,14 @@ struct ComposeResult {
 
 // Progress callback: (framesWritten, framesTotal).
 using ComposeProgress = std::function<void(qint64, qint64)>;
+
+// Locates ffmpeg / ffprobe. A GUI app launched from Finder inherits a minimal
+// PATH (/usr/bin:/bin:/usr/sbin:/sbin), so a Homebrew install is invisible to a
+// plain name lookup; these probe the usual prefixes and then the real PATH.
+// `ffprobe` is looked for next to the given ffmpeg first, so a matched pair from
+// one install is always used together.
+QString findFfmpeg();
+QString findFfprobe(const QString &ffmpeg = QString());
 
 ComposeResult composeProject(const ComposeOptions &options, const ComposeProgress &progress = {});
 

@@ -3,6 +3,7 @@
 #include "mac/QuickScreenshot.h"
 #include "mac/GlobalHotkey.h"
 #include "mac/MacWindowStyle.h"
+#include "render/ExportController.h"
 #include "render/VideoSurface.h"
 #include "settings/BackgroundLibrary.h"
 #include "settings/ScreenList.h"
@@ -37,6 +38,7 @@ int main(int argc, char *argv[]) {
     AnimationDriver anim;
     QuickScreenshot screenshot;
     GlobalHotkey hotkey;
+    Render::ExportController exporter;
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("capture"), &capture);
     engine.rootContext()->setContextProperty(QStringLiteral("settings"), &settings);
@@ -47,6 +49,12 @@ int main(int argc, char *argv[]) {
     engine.addImageProvider(QStringLiteral("cursor"), new CursorImageProvider(&anim));
     engine.rootContext()->setContextProperty(QStringLiteral("screenshot"), &screenshot);
     engine.rootContext()->setContextProperty(QStringLiteral("hotkey"), &hotkey);
+    engine.rootContext()->setContextProperty(QStringLiteral("exporter"), &exporter);
+    // The exporter always targets the project the user just recorded.
+    QObject::connect(&capture, &MacCapture::lastRecordingPathChanged, &exporter, [&] {
+        exporter.setProjectDirectory(capture.lastProjectPath());
+    });
+    exporter.setProjectDirectory(capture.lastProjectPath());
     engine.loadFromModule("Jianku.Screen", "Main");
     if (engine.rootObjects().isEmpty())
         return 1;
