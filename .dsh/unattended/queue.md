@@ -5,7 +5,10 @@
 - 项目根：`/Users/moyingxz/Documents/Zzx/05_项目开发/Jianku Screen`
 - 验证命令：`cd build && cmake --build . -j8 && ctest --output-on-failure`
 - 运行日志：`.dsh/unattended/`
-- 上次更新：2026-10-04 05:55
+- 上次更新：2026-10-04 07:30｜用户已回来，无人值守结束
+
+> **本轮无人值守已于 2026-10-04 07:20 结束**（用户回来）。此后按用户在场的方式推进，
+> 且已获授权：新建 GitHub 仓库并推送。远端：https://github.com/XZMoYing/jianku-screen
 
 ## 授权边界（本次无人值守）
 
