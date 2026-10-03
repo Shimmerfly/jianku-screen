@@ -310,7 +310,7 @@ void applyMotionBlurOverrides(MotionBlurSettings &settings, const MotionBlurSett
 }
 
 ComposeContext makeComposeContext(ProjectData project, const QString &backgroundRoot,
-    const MotionBlurSettings &blurOverride) {
+    const MotionBlurSettings &blurOverride, int resolutionOverride) {
     ComposeContext context;
     context.project = std::move(project);
     if (!context.project.valid) {
@@ -356,8 +356,9 @@ ComposeContext makeComposeContext(ProjectData project, const QString &background
     // The canvas is fixed for an export (the output size), so the content is
     // contained inside it; the aspect ratio setting decides that size.
     context.canvasPlan = planCanvas(settings.canvas,
-        canvasSizeForAspect(context.project.sourceSize,
-            map.value(QStringLiteral("outputAspectRatio")).toString()),
+        canvasSizeForResolution(canvasSizeForAspect(context.project.sourceSize,
+                map.value(QStringLiteral("outputAspectRatio")).toString()),
+            resolutionOverride),
         context.project.sourceSize);
     if (!context.canvasPlan.valid) {
         context.error = context.canvasPlan.error;
@@ -735,7 +736,8 @@ ComposeResult composeProject(const ComposeOptions &options, const ComposeProgres
         return result;
     }
 
-    ComposeContext context = makeComposeContext(project, options.backgroundRoot, options.motionBlur);
+    ComposeContext context = makeComposeContext(project, options.backgroundRoot,
+        options.motionBlur, options.exportHeight);
     if (!context.valid) {
         result.error = context.error;
         return result;

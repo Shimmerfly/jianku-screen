@@ -70,6 +70,8 @@ int main(int argc, char *argv[]) {
         QStringLiteral("删掉一段输出时间，格式 起:止（毫秒）"), QStringLiteral("from:to"));
     const QCommandLineOption speedOption(QStringLiteral("speed"),
         QStringLiteral("对一段输出时间变速，格式 起:止:倍率"), QStringLiteral("from:to:rate"));
+    const QCommandLineOption heightOption(QStringLiteral("height"),
+        QStringLiteral("导出高度（如 1080、720）；默认保持录制分辨率"), QStringLiteral("px"));
     const QCommandLineOption systemVolumeOption(QStringLiteral("system-volume"),
         QStringLiteral("系统声音音量（默认取工程里的值）"), QStringLiteral("x"));
     const QCommandLineOption microphoneVolumeOption(QStringLiteral("microphone-volume"),
@@ -77,7 +79,7 @@ int main(int argc, char *argv[]) {
     parser.addOptions({outputOption, fpsOption, backgroundOption, ffmpegOption, noCursorOption,
         noZoomOption, noAudioOption, noMicrophoneOption, blurOption, blurCursorOption,
         blurMoveOption, blurZoomOption, framesOption, startOption, trimFromOption, trimToOption,
-        cutOption, speedOption, systemVolumeOption, microphoneVolumeOption});
+        cutOption, speedOption, systemVolumeOption, microphoneVolumeOption, heightOption});
     parser.process(app);
 
     const QStringList positional = parser.positionalArguments();
@@ -163,6 +165,15 @@ int main(int argc, char *argv[]) {
             return 2;
         }
         options.edits.push_back({Render::EditKind::Cut, from, to, 0.0});
+    }
+    if (parser.isSet(heightOption)) {
+        bool ok = false;
+        const int value = parser.value(heightOption).toInt(&ok);
+        if (!ok || value < 120 || value > 4320) {
+            QTextStream(stderr) << "无效的 --height（120..4320）：" << parser.value(heightOption) << '\n';
+            return 2;
+        }
+        options.exportHeight = value;
     }
     if (parser.isSet(systemVolumeOption)) {
         bool ok = false;

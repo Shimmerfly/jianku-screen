@@ -33,7 +33,7 @@ Item {
         transcript: ["字幕", "自动转写字幕样式"],
         shortcuts: ["快捷键", "按键提示的显示方式"],
         shortcuts2: ["", ""],
-        speed: ["速度", "播放与变速"],
+        speed: ["导出", "成片的分辨率与帧率"],
         layout: ["布局", "来源与摄像头排布"],
         screenshot: ["快捷截图", "全局快捷键与输出目录"]
     })
@@ -372,6 +372,50 @@ Item {
                         options: ["自动", "16:9", "16:10", "4:3", "1:1", "9:16", "21:9"]
                         currentIndex: Math.max(0, ["auto", "16:9", "16:10", "4:3", "1:1", "9:16", "21:9"].indexOf(String(settings.current.outputAspectRatio)))
                         onActivated: i => settings.setCurrent("outputAspectRatio", ["auto", "16:9", "16:10", "4:3", "1:1", "9:16", "21:9"][i])
+                    }
+                }
+
+                // ---------------- Export ----------------
+                // Resolution and frame rate sit together because they are the two
+                // answers to the same question: how big and how smooth is the file.
+                // The resolution is a *height*: the width follows the canvas's own
+                // shape, so a 16:10 recording exported at 1080p is 1728x1080 rather
+                // than being letterboxed into 1920x1080.
+                PanelCard {
+                    Layout.fillWidth: true
+                    visible: page.section === "speed"
+                    title: "导出设置"
+
+                    UiSegmented {
+                        Layout.fillWidth: true
+                        options: ["原始", "2160p", "1440p", "1080p", "720p", "480p"]
+                        currentIndex: {
+                            const heights = [0, 2160, 1440, 1080, 720, 480]
+                            const i = heights.indexOf(Number(exporter.exportHeight))
+                            return i >= 0 ? i : 0
+                        }
+                        onActivated: i => exporter.exportHeight = [0, 2160, 1440, 1080, 720, 480][i]
+                    }
+                    UiSegmented {
+                        Layout.fillWidth: true
+                        options: ["24", "30", "60", "120"]
+                        currentIndex: {
+                            const rates = [24, 30, 60, 120]
+                            const i = rates.indexOf(Number(exporter.frameRate))
+                            return i >= 0 ? i : 2
+                        }
+                        onActivated: i => exporter.frameRate = [24, 30, 60, 120][i]
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        // The actual size the settings will produce, so "1080p" on a
+                        // 16:10 canvas is not a surprise after a long export.
+                        text: exporter.outputSizeLabel.length > 0
+                            ? "成片尺寸 " + exporter.outputSizeLabel + " · " + exporter.frameRate + " fps"
+                            : "录制完成后再导出；尺寸随来源比例与分辨率设置决定"
+                        color: Theme.textFaint
+                        font.pixelSize: 10
+                        wrapMode: Text.WordWrap
                     }
                 }
 
@@ -739,20 +783,12 @@ Item {
                     UiToggle { Layout.fillWidth: true; label: "显示单字母按键"; checked: !!settings.current.showShortcutsWithSingleLetters; onToggled: v => settings.setCurrent("showShortcutsWithSingleLetters", v) }
                 }
 
-                // ---------------- Speed ----------------
-                PanelCard {
-                    Layout.fillWidth: true
-                    visible: page.section === "speed"
-                    title: "播放速度"
-                    resetKeys: ["playbackSpeed"]
-                    UiSlider {
-                        Layout.fillWidth: true
-                        label: "速度"
-                        from: 0.25; to: 4; step: 0.05; decimals: 2; suffix: "×"
-                        value: Number(settings.current.playbackSpeed || 1)
-                        onEdited: v => page.setSlider("playbackSpeed", v)
-                    }
-                }
+                // The old "playback speed" card lived here. It wrote `playbackSpeed`,
+                // which nothing ever read — the same class of dead control as the two
+                // volume sliders (queue Q21). Speed is a *timeline* operation now (the
+                // strip's 0.5x/1x/2x/4x buttons) and belongs to a specific segment, not
+                // to a global setting, so the slider is gone rather than wired up: a
+                // single global speed would contradict the per-segment model.
 
                 // ---------------- Layout ----------------
                 PanelCard {

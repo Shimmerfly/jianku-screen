@@ -59,6 +59,16 @@ CanvasLayout computeCanvasLayout(const CanvasLayoutInput &input);
 // Sizes are rounded to even numbers so 4:2:0 encoders accept them.
 QSizeF canvasSizeForAspect(const QSizeF &content, const QString &aspectRatio);
 
+// Scales a canvas down to a requested height, keeping its aspect ratio. The named
+// resolutions are height presets (1080p, 720p…) because that is how they are offered
+// and understood; the width follows from the canvas's own shape, so a 16:10 recording
+// exported at "1080p" is 1728x1080 rather than being forced to 1920x1080 and letterboxed.
+//
+// `targetHeight` of 0 or less means "keep the source resolution". Sizes stay even in
+// both axes, and never grow: exporting a 720p recording at "4K" would be an upscale,
+// which costs time and adds nothing, so the source size is kept instead.
+QSizeF canvasSizeForResolution(const QSizeF &canvas, int targetHeight);
+
 double aspectValue(const QString &aspectRatio, const QSizeF &content);
 
 } // namespace Render

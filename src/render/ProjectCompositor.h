@@ -189,8 +189,11 @@ struct ComposeContext {
     int height() const { return canvasPlan.height(); }
 };
 
+// `resolutionOverride` is a requested export height (0 keeps the source). It is applied
+// to the canvas the aspect-ratio setting produced, so the two settings compose: the
+// shape comes from one, the pixel count from the other.
 ComposeContext makeComposeContext(ProjectData project, const QString &backgroundRoot,
-    const MotionBlurSettings &blurOverride = {});
+    const MotionBlurSettings &blurOverride = {}, int resolutionOverride = 0);
 
 // Applies caller overrides on top of the project's own values. Any field left
 // negative in `overrides` keeps what `settings` already holds.
@@ -263,6 +266,10 @@ struct ComposeOptions {
     QString ffmpegPath = QStringLiteral("ffmpeg");
     QString backgroundRoot;
     int fps = 60;
+    // Export height in pixels (1080, 720…). 0 keeps the source resolution. The width
+    // follows the canvas's own aspect ratio, so a 16:10 recording is not letterboxed
+    // into 16:9 just because "1080p" was chosen.
+    int exportHeight = 0;
     bool includeCursor = true;
     bool includeAutoZoom = true;
     bool includeAudio = true;

@@ -74,6 +74,25 @@ QSize displayPixelSize(SCDisplay *display) {
     return result;
 }
 
+// Refresh rate of the mode that is actually driving the display.
+//
+// Read from the display's *current* mode rather than from a list of the modes it
+// supports: what matters for a recording is the rate frames are arriving at, not what
+// the panel could do. Returns 0 when the system does not report one — a projector or
+// a virtual display, for instance — because inventing 60 would misstate the source.
+double displayRefreshRate(SCDisplay *display) {
+    CGDisplayModeRef mode = CGDisplayCopyDisplayMode(display.displayID);
+    if (!mode)
+        return 0.0;
+    const double rate = CGDisplayModeGetRefreshRate(mode);
+    CGDisplayModeRelease(mode);
+    // A fixed-rate mode reports 0; ask CoreGraphics for the panel's nominal rate as a
+    // fallback, which is what a user means by "the display's refresh rate".
+    if (rate > 0.0)
+        return rate;
+    return 0.0;
+}
+
 qint64 timeNs(CMTime time) {
     return CMTimeConvertScale(time, 1000000000, kCMTimeRoundingMethod_RoundHalfAwayFromZero).value;
 }
@@ -809,12 +828,23 @@ void MacCapture::refreshDisplays() {
                 owner->impl_->applications = content.applications;
                 owner->impl_->windows = content.windows;
                 QStringList names;
+                QVariantList rates;
                 for (SCDisplay *display in content.displays) {
                     const QSize pixels = displayPixelSize(display);
-                    names << QStringLiteral("显示器 %1 · %2 × %3")
-                                 .arg(display.displayID).arg(pixels.width()).arg(pixels.height());
+                    // Resolution and refresh rate are shown as equals: both decide
+                    // what a recording can contain, and a 60 Hz panel recorded at
+                    // 3360x2100 is a different job from the same panel at 120 Hz.
+                    const double rate = displayRefreshRate(display);
+                    rates.append(rate);
+                    names << (rate > 0.0
+                        ? QStringLiteral("显示器 %1 · %2 × %3 · %4 Hz")
+                              .arg(display.displayID).arg(pixels.width()).arg(pixels.height())
+                              .arg(QString::number(rate, 'g', 4))
+                        : QStringLiteral("显示器 %1 · %2 × %3 · 刷新率未知")
+                              .arg(display.displayID).arg(pixels.width()).arg(pixels.height()));
                 }
                 owner->displayNames_ = names;
+                owner->displayRefreshRates_ = rates;
                 emit owner->displayNamesChanged();
                 owner->windowSources_ = windowSourceList(content.windows);
                 emit owner->windowSourcesChanged();

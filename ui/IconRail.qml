@@ -15,7 +15,7 @@ Item {
         { key: "audio", glyph: "\u266A", label: "音频" },
         { key: "transcript", glyph: "T", label: "字幕" },
         { key: "shortcuts", glyph: "\u2318", label: "快捷键" },
-        { key: "speed", glyph: "\u00BB", label: "速度" },
+        { key: "speed", glyph: "\u00BB", label: "导出" },
         { key: "layout", glyph: "\u25A6", label: "布局" }
     ]
 

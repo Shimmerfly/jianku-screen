@@ -13,6 +13,10 @@ class VideoFrameStore;
 class MacCapture final : public QObject {
     Q_OBJECT
     Q_PROPERTY(QStringList displayNames READ displayNames NOTIFY displayNamesChanged)
+    // Refresh rate of each display, in the same order as displayNames. 0 means the
+    // system did not report one. Kept separate from the label because the export
+    // settings need the number, not the text.
+    Q_PROPERTY(QVariantList displayRefreshRates READ displayRefreshRates NOTIFY displayNamesChanged)
     // Window sources, as a QVariantList of {windowId, title, application, width,
     // height} so QML can offer a picker without knowing about ScreenCaptureKit.
     Q_PROPERTY(QVariantList windowSources READ windowSources NOTIFY windowSourcesChanged)
@@ -40,6 +44,7 @@ public:
     ~MacCapture() override;
 
     QStringList displayNames() const { return displayNames_; }
+    QVariantList displayRefreshRates() const { return displayRefreshRates_; }
     QVariantList windowSources() const { return windowSources_; }
     QString status() const { return status_; }
     bool running() const { return running_; }
@@ -117,6 +122,7 @@ private:
     void startSource(const Capture::CaptureSource &source);
 
     QStringList displayNames_;
+    QVariantList displayRefreshRates_;
     QVariantList windowSources_;
     QString status_ = QStringLiteral("正在准备屏幕来源…");
     bool running_ = false;

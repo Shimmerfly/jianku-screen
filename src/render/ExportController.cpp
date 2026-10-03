@@ -47,6 +47,9 @@ void ExportController::setProjectDirectory(const QString &directory) {
         defaultOutputPath_ = next;
         emit defaultOutputPathChanged();
     }
+    // The label depends on the project's source size, so a new project changes it
+    // even when the chosen resolution did not.
+    emit outputSizeLabelChanged();
 }
 
 bool ExportController::start(const QString &outputPath, bool includeCursor,
@@ -81,6 +84,7 @@ bool ExportController::start(const QString &outputPath, bool includeCursor,
     options.includeAudio = includeAudio;
     options.includeMicrophone = includeMicrophone;
     options.fps = frameRate_;
+    options.exportHeight = exportHeight_;
     // The strength factor is fps / 60 relative to the reference's 60 fps, so it
     // follows the export frame rate. Everything else stays as the project saved it.
     options.motionBlur.fps = options.fps;
@@ -165,6 +169,34 @@ void ExportController::revealOutput() const {
         return;
     QProcess::startDetached(QStringLiteral("/usr/bin/open"),
         {QStringLiteral("-R"), outputPath_});
+}
+
+void ExportController::setExportHeight(int height) {
+    // 0 is "keep the source", which is a real choice and not a missing value, so it is
+    // passed through; anything above 4K is refused rather than silently clamped,
+    // because the user asked for a size the encoder will not produce.
+    const int clamped = height <= 0 ? 0 : std::clamp(height, 120, 4320);
+    if (clamped == exportHeight_)
+        return;
+    exportHeight_ = clamped;
+    emit exportHeightChanged();
+    emit outputSizeLabelChanged();
+}
+
+QString ExportController::outputSizeLabel() const {
+    if (projectDirectory_.isEmpty())
+        return {};
+    QString loadError;
+    const ProjectData project = loadProject(projectDirectory_, &loadError);
+    if (!project.valid)
+        return {};
+    // The same two steps the export takes, so the label cannot disagree with the file:
+    // the shape comes from the project's aspect ratio, the pixel count from here.
+    const QSizeF canvas = canvasSizeForResolution(
+        canvasSizeForAspect(project.sourceSize,
+            project.settings.value(QStringLiteral("outputAspectRatio")).toString()),
+        exportHeight_);
+    return QStringLiteral("%1 × %2").arg(int(canvas.width())).arg(int(canvas.height()));
 }
 
 void ExportController::setFrameRate(int fps) {

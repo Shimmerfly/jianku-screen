@@ -31,6 +31,11 @@ class ExportController final : public QObject {
     // same frames the export writes; keeping one source avoids the two disagreeing
     // about where a frame boundary is.
     Q_PROPERTY(int frameRate READ frameRate WRITE setFrameRate NOTIFY frameRateChanged)
+    // Export height (0 = the recording's own resolution). The width follows the
+    // canvas's aspect ratio; the two together are what "export settings" means.
+    Q_PROPERTY(int exportHeight READ exportHeight WRITE setExportHeight NOTIFY exportHeightChanged)
+    // The output size the settings will produce, for the UI to show before exporting.
+    Q_PROPERTY(QString outputSizeLabel READ outputSizeLabel NOTIFY outputSizeLabelChanged)
 
 public:
     explicit ExportController(QObject *parent = nullptr);
@@ -47,6 +52,11 @@ public:
 
     int frameRate() const { return frameRate_; }
     void setFrameRate(int fps);
+
+    int exportHeight() const { return exportHeight_; }
+    void setExportHeight(int height);
+    // "<w> × <h>" for the chosen settings, or empty when there is no project yet.
+    QString outputSizeLabel() const;
 
     // Records the project the UI is looking at. Called whenever a recording
     // finishes; an empty path disables exporting.
@@ -74,6 +84,8 @@ signals:
     void errorChanged();
     void defaultOutputPathChanged();
     void frameRateChanged();
+    void exportHeightChanged();
+    void outputSizeLabelChanged();
     // Emitted once per finished export; `ok` mirrors the error being empty.
     void finished(bool ok);
 
@@ -83,6 +95,7 @@ private:
     QString projectDirectory_;
     Project::EditTimeline timeline_;
     int frameRate_ = 60;
+    int exportHeight_ = 0;
     QString defaultOutputPath_;
     QString outputPath_;
     QString status_;

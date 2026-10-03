@@ -7,7 +7,12 @@
 namespace Render {
 namespace {
 double evenFloor(double value) {
-    const double rounded = std::floor(value);
+    // The epsilon absorbs representation error, and it is not cosmetic: scaling a
+    // 3360x2100 canvas to 1080 high gives exactly 1728 in arithmetic but
+    // 1727.9999999999998 in double, and flooring that loses *two* pixels (1726, since
+    // the result is also made even). One part in 1e12 is far below a pixel and far
+    // above the error, so it only ever corrects a value that is already exact.
+    const double rounded = std::floor(value + 1e-9);
     return rounded - std::fmod(rounded, 2.0);
 }
 }
@@ -32,6 +37,15 @@ double paddingForContent(const QSizeF &content, double paddingPercent) {
     if (denominator <= 0.0)
         return 0.0;
     return shortSide * ratio / denominator;
+}
+
+QSizeF canvasSizeForResolution(const QSizeF &canvas, int targetHeight) {
+    if (canvas.width() <= 0.0 || canvas.height() <= 0.0)
+        return canvas;
+    if (targetHeight <= 0 || canvas.height() <= targetHeight)
+        return QSizeF(evenFloor(canvas.width()), evenFloor(canvas.height()));
+    const double scale = targetHeight / canvas.height();
+    return QSizeF(evenFloor(canvas.width() * scale), evenFloor(targetHeight));
 }
 
 double aspectValue(const QString &aspectRatio, const QSizeF &content) {

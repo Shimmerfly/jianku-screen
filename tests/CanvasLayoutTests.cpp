@@ -148,6 +148,50 @@ int main(int argc, char **argv) {
             require(close(tall.width() / tall.height(), 9.0 / 16.0, 1e-3), "9:16 canvas ratio");
         }
 
+        // --- export resolution -------------------------------------------------
+        // "1080p" is offered as a height because that is how it is understood, and the
+        // width has to follow the canvas's own shape. Forcing 1920 wide would letterbox
+        // every non-16:9 recording that was exported at a named resolution.
+        {
+            const QSizeF wide(3360.0, 2100.0);   // 16:10
+            require(canvasSizeForResolution(wide, 0) == QSizeF(3360.0, 2100.0),
+                "no resolution means the source size");
+            require(canvasSizeForResolution(wide, 1080) == QSizeF(1728.0, 1080.0),
+                "1080p keeps the 16:10 shape at 1728x1080");
+            require(canvasSizeForResolution(wide, 720) == QSizeF(1152.0, 720.0),
+                "720p halves it the same way");
+
+            const QSizeF sixteenNine(1920.0, 1080.0);
+            require(canvasSizeForResolution(sixteenNine, 1080) == QSizeF(1920.0, 1080.0),
+                "a 16:9 canvas at 1080p is exactly 1920x1080");
+            require(canvasSizeForResolution(sixteenNine, 2160) == QSizeF(1920.0, 1080.0),
+                "an export never upscales: 4K of a 1080p source keeps 1080p");
+
+            // Both axes stay even, or a 4:2:0 encoder rejects the frame.
+            for (const int height : {1080, 720, 480, 360, 1440}) {
+                const QSizeF size = canvasSizeForResolution(QSizeF(1512.0, 982.0), height);
+                require(int(size.width()) % 2 == 0 && int(size.height()) % 2 == 0,
+                    "both export dimensions are even");
+                require(size.height() <= 982.0 || height <= 982,
+                    "and never larger than the source");
+            }
+
+            // The aspect ratio is preserved to within the even-number rounding.
+            for (const int height : {1080, 720, 480}) {
+                const QSizeF size = canvasSizeForResolution(wide, height);
+                const double sourceAspect = wide.width() / wide.height();
+                const double exportAspect = size.width() / size.height();
+                require(std::abs(sourceAspect - exportAspect) < 0.01,
+                    "the export keeps the canvas aspect ratio");
+            }
+
+            // Degenerate input must not divide by zero.
+            require(canvasSizeForResolution(QSizeF(), 1080) == QSizeF(),
+                "an empty canvas stays empty");
+            require(canvasSizeForResolution(wide, -100) == QSizeF(3360.0, 2100.0),
+                "a negative height means the source size");
+        }
+
         std::cout << "canvas layout checks passed\n";
         return 0;
     } catch (const std::exception &error) {
