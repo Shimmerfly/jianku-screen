@@ -197,6 +197,24 @@ int main(int argc, char **argv) {
             require(close(resolved.snapToEdgesRatio, 0.3), "snap ratio is read");
             require(close(resolved.cursor.movement.stiffness, 470.0),
                 "screen settings do not clobber the cursor spring");
+
+            // The click feedback spring. `mouseClickSpring` (700/30/1) exists in the
+            // settings and in every project, but the located reference chain says the
+            // zoomer-and-fader call uses its *own* spring (300/30/0.3), which is what
+            // the engine already runs. So this asserts the value is deliberately
+            // ignored: wiring it up would look like fixing an unwired setting while
+            // actually contradicting the evidence. The test is here so nobody
+            // "fixes" it back without seeing that note.
+            QVariantMap click;
+            click.insert("mouseClickSpring",
+                QVariantMap{{"stiffness", 700.0}, {"damping", 30.0}, {"mass", 1.0}});
+            const DriverSettings clicked = driverSettingsFromMap(click);
+            require(close(clicked.cursor.clickFader.stiffness, 300.0)
+                    && close(clicked.cursor.clickFader.damping, 30.0)
+                    && close(clicked.cursor.clickFader.mass, 0.3),
+                "mouseClickSpring does not drive the click fader");
+            require(close(clicked.cursor.movement.stiffness, 470.0),
+                "and it does not clobber the movement spring either");
         }
 
         std::cout << "cursor engine checks passed\n";

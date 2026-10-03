@@ -70,10 +70,14 @@ int main(int argc, char *argv[]) {
         QStringLiteral("删掉一段输出时间，格式 起:止（毫秒）"), QStringLiteral("from:to"));
     const QCommandLineOption speedOption(QStringLiteral("speed"),
         QStringLiteral("对一段输出时间变速，格式 起:止:倍率"), QStringLiteral("from:to:rate"));
+    const QCommandLineOption systemVolumeOption(QStringLiteral("system-volume"),
+        QStringLiteral("系统声音音量（默认取工程里的值）"), QStringLiteral("x"));
+    const QCommandLineOption microphoneVolumeOption(QStringLiteral("microphone-volume"),
+        QStringLiteral("麦克风音量（默认取工程里的值）"), QStringLiteral("x"));
     parser.addOptions({outputOption, fpsOption, backgroundOption, ffmpegOption, noCursorOption,
         noZoomOption, noAudioOption, noMicrophoneOption, blurOption, blurCursorOption,
         blurMoveOption, blurZoomOption, framesOption, startOption, trimFromOption, trimToOption,
-        cutOption, speedOption});
+        cutOption, speedOption, systemVolumeOption, microphoneVolumeOption});
     parser.process(app);
 
     const QStringList positional = parser.positionalArguments();
@@ -159,6 +163,24 @@ int main(int argc, char *argv[]) {
             return 2;
         }
         options.edits.push_back({Render::EditKind::Cut, from, to, 0.0});
+    }
+    if (parser.isSet(systemVolumeOption)) {
+        bool ok = false;
+        const double value = parser.value(systemVolumeOption).toDouble(&ok);
+        if (!ok || value < 0.0) {
+            QTextStream(stderr) << "无效的 --system-volume：" << parser.value(systemVolumeOption) << '\n';
+            return 2;
+        }
+        options.systemAudioVolume = value;
+    }
+    if (parser.isSet(microphoneVolumeOption)) {
+        bool ok = false;
+        const double value = parser.value(microphoneVolumeOption).toDouble(&ok);
+        if (!ok || value < 0.0) {
+            QTextStream(stderr) << "无效的 --microphone-volume：" << parser.value(microphoneVolumeOption) << '\n';
+            return 2;
+        }
+        options.microphoneVolume = value;
     }
     if (parser.isSet(trimFromOption)) {
         bool ok = false;

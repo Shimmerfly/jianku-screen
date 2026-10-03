@@ -38,6 +38,13 @@ DriverSettings driverSettingsFromMap(const QVariantMap &settings, const DriverSe
     if (settings.contains("cursorBaseRotation"))
         result.cursor.baseRotationDeg = settings.value("cursorBaseRotation").toDouble();
 
+    // `mouseClickSpring` (700/30/1) is deliberately NOT read here. The located
+    // reference chain says the zoomer-and-fader call uses its own spring
+    // (300/30/0.3) rather than that field, which is what `cursor.clickFader` already
+    // holds. Reading it would look like fixing an unwired setting while actually
+    // contradicting the evidence — see research/桌面动画处理链-官方3.7.5静态.md.
+    // What `mouseClickSpring` does drive is not located yet.
+
     if (settings.contains("defaultZoomLevel"))
         result.zoomLevel = settings.value("defaultZoomLevel").toDouble();
     if (settings.contains("autoZoom"))

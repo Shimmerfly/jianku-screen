@@ -359,6 +359,46 @@ int main(int argc, char **argv) {
                 "sequence recentres");
         }
 
+        // --- mix levels come from the project --------------------------------
+        // The two volume sliders existed in the settings page and in every project
+        // manifest, and nothing read them: an export used 1.0 regardless, so moving
+        // either slider changed nothing. This pins the mapping.
+        {
+            Fixture fixture;
+            require(fixture.build(), "fixture");
+            const QString path = fixture.root + "/project.json";
+            QFile file(path);
+            require(file.open(QIODevice::ReadOnly), "read manifest");
+            QJsonObject manifest = QJsonDocument::fromJson(file.readAll()).object();
+            file.close();
+            QJsonObject settings = manifest.value(QStringLiteral("settings")).toObject();
+            settings.insert(QStringLiteral("systemAudioVolume"), 0.4);
+            settings.insert(QStringLiteral("audioVolume"), 0.25);
+            manifest.insert(QStringLiteral("settings"), settings);
+            write(path, QJsonDocument(manifest).toJson());
+
+            QString loadError;
+            const ProjectData loaded = loadProject(fixture.root, &loadError);
+            require(loaded.valid, "the edited manifest still loads");
+            const ComposeContext mixed = makeComposeContext(loaded,
+                QStringLiteral(JIANKU_SOURCE_DIR "/assets/backgrounds"));
+            require(mixed.valid, "context builds");
+            require(close(mixed.settings.systemAudioVolume, 0.4), "the system level is read");
+            require(close(mixed.settings.microphoneVolume, 0.25), "the microphone level is read");
+
+            // Out-of-range values are clamped rather than passed to ffmpeg: a negative
+            // volume would invert the waveform instead of silencing it.
+            settings.insert(QStringLiteral("systemAudioVolume"), -3.0);
+            settings.insert(QStringLiteral("audioVolume"), 99.0);
+            manifest.insert(QStringLiteral("settings"), settings);
+            write(path, QJsonDocument(manifest).toJson());
+            const ComposeContext clamped = makeComposeContext(loadProject(fixture.root), {});
+            require(clamped.valid, "context builds");
+            require(close(clamped.settings.systemAudioVolume, 0.0), "a negative level clamps to 0");
+            require(close(clamped.settings.microphoneVolume, 4.0), "an absurd level clamps to 4");
+            write(path, QJsonDocument(manifest).toJson());
+        }
+
         // --- real recording smoke test (only when one is present) ------------
 #ifndef JIANKU_SMOKE_PROJECT
 #define JIANKU_SMOKE_PROJECT ""

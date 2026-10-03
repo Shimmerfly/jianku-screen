@@ -328,6 +328,14 @@ ComposeContext makeComposeContext(ProjectData project, const QString &background
     // Motion blur: one global amount times a per-channel one, as the reference
     // stores them. Motion blur is off unless a project asks for it, so existing
     // recordings export exactly as before.
+    // Mix levels, straight from the project. The compositor has always accepted them
+    // on ComposeOptions, but nothing filled them in, so the disk settings page's two
+    // volume sliders had no effect on any export.
+    settings.systemAudioVolume = std::clamp(
+        map.value(QStringLiteral("systemAudioVolume"), 1.0).toDouble(), 0.0, 4.0);
+    settings.microphoneVolume = std::clamp(
+        map.value(QStringLiteral("audioVolume"), 1.0).toDouble(), 0.0, 4.0);
+
     MotionBlurSettings &blur = settings.motionBlur;
     blur.amount = map.value(QStringLiteral("motionBlurAmount"), 0.0).toDouble();
     blur.cursorAmount = map.value(QStringLiteral("motionBlurCursorAmount"), 0.0).toDouble();
@@ -864,6 +872,12 @@ ComposeResult composeProject(const ComposeOptions &options, const ComposeProgres
                     << context.project.directory + QLatin1Char('/') + context.project.microphone.file;
     }
     encoderArgs << QStringLiteral("-map") << QStringLiteral("0:v:0");
+    // The caller may override the levels (the CLI does); otherwise the project's own
+    // values are used. The project's are clamped when the context is built.
+    const double systemVolume = options.systemAudioVolume >= 0.0
+        ? options.systemAudioVolume : context.settings.systemAudioVolume;
+    const double microphoneVolume = options.microphoneVolume >= 0.0
+        ? options.microphoneVolume : context.settings.microphoneVolume;
     if (options.includeAudio && !useMicrophone)
         encoderArgs << QStringLiteral("-map") << QStringLiteral("1:a:0?");
     if (useMicrophone) {
@@ -875,9 +889,9 @@ ComposeResult composeProject(const ComposeOptions &options, const ComposeProgres
             "[1:a]volume=%1[sys];"
             "[2:a]adelay=%2:all=1,volume=%3[mic];"
             "[sys][mic]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[aout]")
-            .arg(options.systemAudioVolume, 0, 'f', 3)
+            .arg(systemVolume, 0, 'f', 3)
             .arg(holdMs)
-            .arg(options.microphoneVolume, 0, 'f', 3);
+            .arg(microphoneVolume, 0, 'f', 3);
         encoderArgs << QStringLiteral("-filter_complex") << graph
                     << QStringLiteral("-map") << QStringLiteral("[aout]");
     }

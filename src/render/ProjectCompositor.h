@@ -136,6 +136,13 @@ struct ComposerSettings {
     double cursorSizeFactor = 1.5;
     bool hideCursor = false;
 
+    // Mix levels, from the project's settings. The microphone slider is stored as
+    // `audioVolume` (the reference's name) and the system one as `systemAudioVolume`;
+    // the export path only uses them when the microphone is mixed in, because the
+    // system-only path is a stream copy that must not be re-encoded.
+    double systemAudioVolume = 1.0;
+    double microphoneVolume = 1.0;
+
     // Motion blur strengths, straight from the project's settings. The reference
     // keeps one global amount plus a per-channel one for the pointer, screen
     // movement and screen zoom; the same split is kept here so a project's saved
@@ -276,10 +283,11 @@ struct ComposeOptions {
     // composeProject, in a fixed order (speed, then cuts, then trims). Ignored when
     // `timeline` is already valid.
     std::vector<EditOperation> edits;
-    // Mix levels, applied only on the microphone path (the system-only path is a
-    // stream copy and stays untouched).
-    double systemAudioVolume = 1.0;
-    double microphoneVolume = 1.0;
+    // Mix level overrides, applied only on the microphone path (the system-only path
+    // is a stream copy and stays untouched). A negative value keeps what the project
+    // saved, so the CLI can compare levels without restating them.
+    double systemAudioVolume = -1.0;
+    double microphoneVolume = -1.0;
     int maxOutputFrames = 0;     // 0 = the whole clip (used by smoke tests)
     double startMs = 0.0;
     // Polled once per frame. Returning true stops the export and leaves the
