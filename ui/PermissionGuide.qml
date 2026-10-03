@@ -176,21 +176,16 @@ Item {
                         width: 92
                         height: 92
                         anchors.horizontalCenter: parent.horizontalCenter
-                        radius: 21
-                        gradient: Gradient {
-                            orientation: Gradient.Vertical
-                            GradientStop { position: 0.0; color: "#3F37C9" }
-                            GradientStop { position: 1.0; color: "#8C87DF" }
-                        }
-                        border.width: 1
-                        border.color: "#22ffffff"
-                        Text {
-                            anchors.centerIn: parent
-                            text: "简库\n镜传"
-                            color: "#ffffff"
-                            font.pixelSize: 17
-                            font.weight: Font.DemiBold
-                            horizontalAlignment: Text.AlignHCenter
+                        // The real application mark: this tile is described as the icon
+                        // to drag into the system settings list, so it has to look like
+                        // the icon the user will find there.
+                        Image {
+                            anchors.fill: parent
+                            source: brand.markLarge
+                            sourceSize.width: 92
+                            sourceSize.height: 92
+                            fillMode: Image.PreserveAspectFit
+                            smooth: true
                         }
                         MouseArea {
                             id: appDrag

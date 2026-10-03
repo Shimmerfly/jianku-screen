@@ -12,3 +12,7 @@ research/evidence/screen-studio-home.html
 research/evidence/2026-09-30-round2/
 *.mp4
 *.m4a
+
+# Regenerable build output of scripts/build-branding.py: the .icns next to it is
+# committed, so a build never depends on the script having been run.
+assets/branding/JiankuScreen.iconset/

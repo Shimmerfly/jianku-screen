@@ -8,12 +8,14 @@
 #include "render/TimelineController.h"
 #include "render/VideoSurface.h"
 #include "settings/BackgroundLibrary.h"
+#include "settings/BrandAssets.h"
 #include "settings/ScreenList.h"
 #include "settings/SettingsStore.h"
 
 #include <QApplication>
 #include <QAction>
 #include <QMenu>
+#include <QIcon>
 #include <QPainter>
 #include <QPixmap>
 #include <QQmlApplicationEngine>
@@ -29,6 +31,9 @@ int main(int argc, char *argv[]) {
     QQuickStyle::setStyle(QStringLiteral("Basic"));
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("Jianku Screen"));
+    // The window icon: on macOS this is what the About panel and any window list
+    // show, and it falls back to the same source as the tray icon.
+    app.setWindowIcon(Branding::mark());
     app.setOrganizationName(QStringLiteral("Jianku"));
     app.setQuitOnLastWindowClosed(false);
 
@@ -42,6 +47,7 @@ int main(int argc, char *argv[]) {
     GlobalHotkey hotkey;
     Render::ExportController exporter;
     Render::CanvasPreview canvasPreview;
+    BrandAssets brand;
     Render::TimelineController timeline;
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("capture"), &capture);
@@ -56,6 +62,7 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty(QStringLiteral("exporter"), &exporter);
     engine.rootContext()->setContextProperty(QStringLiteral("canvasPreview"), &canvasPreview);
     engine.rootContext()->setContextProperty(QStringLiteral("timeline"), &timeline);
+    engine.rootContext()->setContextProperty(QStringLiteral("brand"), &brand);
     // The exporter always targets the project the user just recorded, and exports
     // the edit timeline as it stands. The two are wired together here so an export
     // started from the UI can never use a stale timeline: the controller pushes
@@ -95,21 +102,25 @@ int main(int argc, char *argv[]) {
     QObject::connect(&app, &QGuiApplication::lastWindowClosed,
                      &capture, &MacCapture::stop);
 
-    QPixmap iconImage(32, 32);
-    iconImage.fill(Qt::transparent);
-    {
-        QPainter painter(&iconImage);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setBrush(QColor("#e8edf3"));
-        painter.setPen(Qt::NoPen);
-        painter.drawRoundedRect(QRectF(3, 6, 26, 20), 6, 6);
-        painter.setBrush(QColor("#263747"));
-        painter.drawEllipse(QRectF(11, 10, 10, 10));
-    }
-    QSystemTrayIcon tray{QIcon(iconImage)};
+    // The real brand mark. It was a hand-drawn placeholder rectangle before the
+    // logo existed; the tray and the menu bar both use it now.
+    // The menu bar gets the coloured mark rather than the template silhouette. The
+    // silhouette reads better in principle — macOS inverts a template to match the
+    // menu bar — but measured here it is a filled rounded square with the gaps the
+    // four ribbons leave between them: at 22 pt it looks like a bruised blob, not a
+    // mark. The coloured icon is recognisable, and its contrast is fine on a light
+    // menu bar (mean luminance 64 against 240) and merely low on a dark one (64
+    // against 28). `Branding::menuBarIcon()` stays available for a future mark that
+    // is designed as a silhouette.
+    const QIcon trayIcon = Branding::mark();
+    QSystemTrayIcon tray{trayIcon};
     QMenu trayMenu;
     QAction *openAction = trayMenu.addAction(QStringLiteral("打开简库镜传"));
     QAction *screenshotAction = trayMenu.addAction(QStringLiteral("立即截图"));
+    trayMenu.addSeparator();
+    // The About panel is where macOS shows the application icon at its largest, and
+    // it is the one place a user looks to check which build they are running.
+    QAction *aboutAction = trayMenu.addAction(QStringLiteral("关于简库镜传"));
     trayMenu.addSeparator();
     QAction *quitAction = trayMenu.addAction(QStringLiteral("退出"));
     QObject::connect(openAction, &QAction::triggered, mainWindow, [mainWindow] {
@@ -120,6 +131,7 @@ int main(int argc, char *argv[]) {
     QObject::connect(screenshotAction, &QAction::triggered, &screenshot, [&] {
         screenshot.capture(settings.current());
     });
+    QObject::connect(aboutAction, &QAction::triggered, &app, [] { showAboutPanel(); });
     QObject::connect(quitAction, &QAction::triggered, &app, &QApplication::quit);
     QObject::connect(&tray, &QSystemTrayIcon::activated, mainWindow,
         [mainWindow](QSystemTrayIcon::ActivationReason reason) {
@@ -130,6 +142,7 @@ int main(int argc, char *argv[]) {
             }
         });
     tray.setContextMenu(&trayMenu);
+    tray.setIcon(trayIcon);
     tray.setToolTip(QStringLiteral("简库镜传 · 常驻截图"));
     tray.show();
     QObject::connect(&screenshot, &QuickScreenshot::statusChanged, &tray, [&] {

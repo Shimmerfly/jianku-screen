@@ -55,6 +55,8 @@ qt_add_executable(jianku-screen MACOSX_BUNDLE
     src/settings/SettingsStore.h
     src/settings/BackgroundLibrary.cpp
     src/settings/BackgroundLibrary.h
+    src/settings/BrandAssets.cpp
+    src/settings/BrandAssets.h
     src/settings/ScreenList.cpp
     src/settings/ScreenList.h
     src/mac/QuickScreenshot.mm
@@ -306,6 +308,10 @@ set_target_properties(jianku-screen PROPERTIES
     MACOSX_BUNDLE_BUNDLE_NAME "Jianku Screen"
     MACOSX_BUNDLE_GUI_IDENTIFIER "com.jianku.screen"
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/mac/Info.plist.in"
+    # The Finder/Dock icon. Regenerate the assets with scripts/build-branding.py
+    # after replacing logo.png; the .icns is committed so a build never depends on
+    # the script having been run.
+    MACOSX_BUNDLE_ICON_FILE "JiankuScreen.icns"
 )
 
 target_compile_definitions(jianku-screen PRIVATE
@@ -316,6 +322,26 @@ add_custom_command(TARGET jianku-screen POST_BUILD
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/backgrounds"
         "$<TARGET_BUNDLE_CONTENT_DIR:jianku-screen>/Resources/backgrounds"
     COMMENT "Bundling background assets")
+
+# The app icon, the in-app marks and the menu bar template. They live in Resources
+# rather than in the QML resource system so the .icns can be handed to the bundle
+# as a file, and so the UI can load the marks by path like the backgrounds.
+add_custom_command(TARGET jianku-screen POST_BUILD
+    # The .icns goes to the Resources root, which is where CFBundleIconFile looks for
+    # it; the PNG marks live in a subdirectory because they are only ever loaded by
+    # path from the app itself.
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/JiankuScreen.icns"
+        "$<TARGET_BUNDLE_CONTENT_DIR:jianku-screen>/Resources/JiankuScreen.icns"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_BUNDLE_CONTENT_DIR:jianku-screen>/Resources/branding"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/jianku-menubar.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/jianku-mark-22.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/jianku-mark-48.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/branding/jianku-mark-128.png"
+        "$<TARGET_BUNDLE_CONTENT_DIR:jianku-screen>/Resources/branding/"
+    COMMENT "Bundling icon assets")
 
 # Re-sign with a stable identity so TCC permissions survive rebuilds.
 add_custom_command(TARGET jianku-screen POST_BUILD

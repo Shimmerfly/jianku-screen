@@ -275,8 +275,17 @@ ApplicationWindow {
                 anchors.rightMargin: 14
                 spacing: 12
 
+                Image {
+                    source: brand.markMedium
+                    sourceSize.width: 20
+                    sourceSize.height: 20
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    // The mark ships at 22/48/128 px; asking for exactly 20 shows the
+                    // 22 px file scaled down, which stays sharp on Retina.
+                }
                 Text {
-                    text: "简库镜传"
+                    text: brand.displayName
                     color: Theme.text
                     font.pixelSize: 15
                     font.weight: Font.DemiBold
