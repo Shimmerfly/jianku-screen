@@ -771,10 +771,42 @@ ComposeResult composeProject(const ComposeOptions &options, const ComposeProgres
     QImage sourceFrame;
     qint64 sourceIndex = -1;
     QString failure;
+    QByteArray encoderStderr;
+    QByteArray decoderStderr;
+
+    // ffmpeg's stderr must be drained continuously. It is a pipe like any other:
+    // letting it fill up blocks ffmpeg, and never reading it means the failure
+    // message is missing exactly when it is needed.
+    auto drainStderr = [&] {
+        encoderStderr.append(encoder.readAllStandardError());
+        decoderStderr.append(decoder.readAllStandardError());
+    };
+
+    // Qt buffers everything handed to write() in the parent process, and
+    // waitForBytesWritten() only waits for that buffer to be flushed to the pipe
+    // *once* — it returns instantly afterwards. Without an explicit ceiling the
+    // buffer grows as fast as we can composite, which at 26.9 MB per 3360x2100
+    // BGRA frame reached 82 GB and got the process OOM-killed by the kernel.
+    auto waitForEncoderDrain = [&]() -> bool {
+        const qint64 ceiling = bytesPerFrame * 2;
+        while (encoder.bytesToWrite() > ceiling) {
+            if (!encoder.waitForBytesWritten(30000)) {
+                drainStderr();
+                failure = QStringLiteral("编码器写入停滞（仍有 %1 字节未写出）")
+                    .arg(encoder.bytesToWrite());
+                return false;
+            }
+            drainStderr();
+        }
+        return true;
+    };
 
     auto pullSourceFrame = [&]() -> bool {
         qint64 read = 0;
         while (read < bytesPerFrame) {
+            drainStderr();
+            if (!failure.isEmpty())
+                return false;
             if (!decoder.waitForReadyRead(30000) && decoder.bytesAvailable() == 0) {
                 failure = QStringLiteral("解码原始视频时中断（已读 %1/%2 字节）")
                     .arg(read).arg(bytesPerFrame);
@@ -811,6 +843,10 @@ ComposeResult composeProject(const ComposeOptions &options, const ComposeProgres
             break;
         }
 
+        if (!waitForEncoderDrain()) {
+            result.error = failure;
+            break;
+        }
         const qint64 written = encoder.write(
             reinterpret_cast<const char *>(canvas.constBits()), bytesPerFrame);
         if (written != bytesPerFrame) {
@@ -820,27 +856,28 @@ ComposeResult composeProject(const ComposeOptions &options, const ComposeProgres
         ++result.writtenFrames;
         if (progress && (frame % 60 == 0 || frame == totalFrames - 1))
             progress(result.writtenFrames, totalFrames);
-        // Keep the decoder from racing ahead of the encoder.
-        if (!encoder.waitForBytesWritten(30000)) {
-            result.error = QStringLiteral("编码器无响应");
-            break;
-        }
     }
+    drainStderr();
 
     // --- teardown ----------------------------------------------------------
     if (result.error.isEmpty()) {
         encoder.closeWriteChannel();
         if (!encoder.waitForFinished(-1)) {
+            drainStderr();
             result.error = QStringLiteral("编码器未正常结束：") + encoder.errorString();
-        } else if (encoder.exitStatus() != QProcess::NormalExit || encoder.exitCode() != 0) {
-            result.error = QStringLiteral("ffmpeg 编码失败：")
-                + QString::fromUtf8(encoder.readAllStandardError()).trimmed();
+        } else {
+            drainStderr();
+            if (encoder.exitStatus() != QProcess::NormalExit || encoder.exitCode() != 0) {
+                result.error = QStringLiteral("ffmpeg 编码失败：")
+                    + QString::fromUtf8(encoderStderr).trimmed();
+            }
         }
     } else {
         encoder.kill();
         encoder.waitForFinished(5000);
+        drainStderr();
     }
-    result.encoderLog = QString::fromUtf8(encoder.readAllStandardError()).trimmed();
+    result.encoderLog = QString::fromUtf8(encoderStderr).trimmed();
 
     decoder.closeReadChannel(QProcess::StandardOutput);
     if (decoder.state() != QProcess::NotRunning) {
@@ -850,7 +887,8 @@ ComposeResult composeProject(const ComposeOptions &options, const ComposeProgres
             decoder.waitForFinished(5000);
         }
     }
-    result.decoderLog = QString::fromUtf8(decoder.readAllStandardError()).trimmed();
+    drainStderr();
+    result.decoderLog = QString::fromUtf8(decoderStderr).trimmed();
 
     if (result.error.isEmpty()) {
         if (!QFileInfo::exists(temporaryPath) || QFileInfo(temporaryPath).size() == 0) {

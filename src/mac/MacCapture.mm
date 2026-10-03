@@ -916,6 +916,9 @@ void MacCapture::startRecording() {
             if (problem.isEmpty()) problem = owner->impl_->projectManifest.value("pointer").toObject().value("writeError").toString();
             owner->impl_->projectManifest.insert("video", metadata);
             owner->impl_->projectManifest.insert("state", problem.isEmpty() ? "processing" : "failed");
+            // Keep `error` meaning "why this project is not ready". A successful
+            // stop writes an empty string rather than leaving a stale message
+            // from an earlier attempt in the same project directory.
             owner->impl_->projectManifest.insert("error", problem);
             if (!writeProject(owner->impl_->projectDirectory, owner->impl_->projectManifest))
                 problem = QStringLiteral("录制工程清单保存失败，原始素材仍在工程目录");
@@ -931,6 +934,11 @@ void MacCapture::startRecording() {
                         current->impl_->projectManifest.insert("processing", processing);
                         const bool ok = processing.value("state") == "generated";
                         current->impl_->projectManifest.insert("state", ok ? "readyForProcessing" : "recordedUnprocessed");
+                        // A failed timeline build is the reason the project is not
+                        // ready, so it belongs in `error`; a successful one clears
+                        // whatever was there before.
+                        current->impl_->projectManifest.insert("error", ok ? QString()
+                            : processing.value("error").toString());
                         const bool saved = writeProject(directory, current->impl_->projectManifest);
                         current->recordingFinalizing_ = false;
                         current->setRecordingStatus(!saved ? QStringLiteral("工程清单保存失败，原始素材保留：") + directory
