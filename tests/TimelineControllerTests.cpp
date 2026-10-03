@@ -324,6 +324,95 @@ int main(int argc, char **argv) {
             require(!second.error().isEmpty(), "both report a reason");
         }
 
+        // --- trimming by dragging a handle ------------------------------------
+        {
+            TimelineController controller;
+            require(controller.load(project), "loaded");
+            controller.setFrameRate(60.0);
+
+            require(controller.trimStartTo(2000.0), "the head can be trimmed to a time");
+            require(close(controller.outputDurationMs(), 8000.0), "leaving eight seconds");
+            // Output 0 now shows media 2 s: the trimmed material is skipped, not
+            // rescaled. Compared with a tolerance because the requested time was
+            // snapped to a 60 fps frame first, and 120 frames is 2000.0000000000002 ms
+            // in binary floating point.
+            require(close(controller.segments().front().toMap()
+                    .value(QStringLiteral("sourceStartMs")).toDouble(), 2000.0, 1e-6),
+                "output zero points at the new media start");
+
+            // After the head trim the output is 8 s long, so trimming "to 7 s" means
+            // 7 s of *output* time, i.e. media 9 s — the two clocks are different and
+            // every operation here is expressed in output time.
+            require(controller.trimEndTo(7000.0), "the tail can be trimmed too");
+            require(close(controller.outputDurationMs(), 7000.0), "leaving seven seconds");
+            require(close(controller.segments().back().toMap()
+                    .value(QStringLiteral("sourceEndMs")).toDouble(), 9000.0, 1e-6),
+                "which is media 9 s, because the first two seconds were already cut");
+
+            // A dragged handle lands on a frame, so a trim requested mid-frame is
+            // snapped rather than producing a cut no frame corresponds to.
+            TimelineController snapped;
+            require(snapped.load(project), "loaded");
+            snapped.setFrameRate(60.0);
+            require(snapped.trimStartTo(1005.0), "a mid-frame trim is accepted");
+            const double start = snapped.segments().front().toMap()
+                .value(QStringLiteral("sourceStartMs")).toDouble();
+            require(std::abs(start - 1000.0) < 1e-6 || std::abs(start - 1016.6666667) < 1e-3,
+                "and lands on a frame boundary");
+
+            // Refused trims must say why: a handle that silently does nothing reads
+            // as broken.
+            TimelineController guard;
+            require(guard.load(project), "loaded");
+            require(!guard.trimEndTo(50.0), "a trim that would leave under the minimum is refused");
+            require(!guard.error().isEmpty(), "with a reason");
+            require(close(guard.outputDurationMs(), 10000.0), "and the timeline is untouched");
+            // Trimming to where it already is succeeds and changes nothing.
+            require(guard.trimStartTo(0.0), "trimming to the start is a no-op that succeeds");
+            require(close(guard.outputDurationMs(), 10000.0), "with the length intact");
+        }
+
+        // --- retiming the segment under the playhead --------------------------
+        {
+            TimelineController controller;
+            require(controller.load(project), "loaded");
+            controller.setFrameRate(60.0);
+            controller.setPlayheadRatio(0.5);
+            require(controller.setSpeedAtPlayhead(2.0), "the segment at the playhead can be sped up");
+            // The whole ten seconds was one segment, so all of it is retimed and the
+            // output is halved.
+            require(close(controller.outputDurationMs(), 5000.0), "the output halves");
+            require(close(controller.outputRatio(), 0.5), "and the ratio reflects it");
+            require(controller.segments().front().toMap()
+                    .value(QStringLiteral("retimed")).toBool(), "the segment is marked as retimed");
+
+            // After a cut there are two segments, and only the one the playhead is
+            // inside is retimed — the other must stay at real time, or a speed change
+            // would silently affect material the user did not point at.
+            TimelineController partial;
+            require(partial.load(project), "loaded");
+            require(partial.removeRange(5000.0, 6000.0), "cut out a second");
+            partial.setPlayheadRatio(0.1);
+            require(partial.setSpeedAtPlayhead(2.0), "retime the first segment");
+            const QVariantList after = partial.segments();
+            require(after.size() == 2, "still two segments");
+            require(close(after[0].toMap().value(QStringLiteral("speed")).toDouble(), 2.0),
+                "the segment under the playhead is retimed");
+            require(close(after[1].toMap().value(QStringLiteral("speed")).toDouble(), 1.0),
+                "and the other one is left at real time");
+
+            // At the very end the playhead still retimes the last segment.
+            TimelineController tail;
+            require(tail.load(project), "loaded");
+            require(tail.removeRange(0.0, 5000.0), "trim the head so there are two segments");
+            tail.setPlayheadMs(tail.outputDurationMs());
+            require(tail.setSpeedAtPlayhead(1.5), "the last segment can be retimed from the end");
+
+            require(!controller.setSpeedAtPlayhead(0.0), "a zero rate is refused");
+            require(!controller.setSpeedAtPlayhead(-1.0), "and a negative one");
+            require(!controller.error().isEmpty(), "both report a reason");
+        }
+
         // --- no project -------------------------------------------------------
         {
             TimelineController controller;

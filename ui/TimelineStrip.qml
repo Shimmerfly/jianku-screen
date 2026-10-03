@@ -89,6 +89,19 @@ Item {
                 enabled: root.ready && timeline.canRedo
                 onClicked: timeline.redo()
             }
+            // Retimes the segment the playhead is inside. The values the reference
+            // offers; 1× restores real time.
+            Repeater {
+                model: [0.5, 1.0, 2.0, 4.0]
+                delegate: UiButton {
+                    required property var modelData
+                    text: modelData === 1.0 ? "1×" : modelData + "×"
+                    implicitWidth: 38
+                    implicitHeight: 26
+                    enabled: root.ready
+                    onClicked: timeline.setSpeedAtPlayhead(modelData)
+                }
+            }
             UiButton {
                 text: "复原"
                 implicitWidth: 54
@@ -153,6 +166,52 @@ Item {
                 }
             }
 
+            // Dragging anywhere on the track moves the playhead. Declared before the
+            // handles so the handles sit on top of it and win the press.
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onPressed: mouse => root.timeAtX(mouse.x)
+                onPositionChanged: mouse => { if (pressed) root.timeAtX(mouse.x) }
+            }
+
+            // Trim handles at both ends of the strip: drag to move where the output
+            // starts and stops. The handle reports an *output* time, which is what the
+            // trim operations take — the media clock is not what the user is dragging.
+            Repeater {
+                model: [
+                    { edge: "start", ratio: 0 },
+                    { edge: "end", ratio: 1 }
+                ]
+                delegate: Rectangle {
+                    required property var modelData
+                    x: root.stripLeft + modelData.ratio * root.stripWidth
+                        - (modelData.edge === "start" ? 0 : width)
+                    y: track.height - 17
+                    width: 7
+                    height: 18
+                    radius: 2
+                    color: trimHover.hovered || trimDrag.pressed ? Theme.accent : Theme.textFaint
+                    opacity: 0.9
+
+                    HoverHandler { id: trimHover; cursorShape: Qt.SizeHorCursor }
+                    DragHandler {
+                        id: trimDrag
+                        target: null
+                        onActiveChanged: {
+                            if (!active) return
+                            const ratio = Math.max(0, Math.min(1,
+                                (centroid.scenePosition.x - track.mapToScene(0, 0).x
+                                    - root.stripLeft) / root.stripWidth))
+                            if (modelData.edge === "start")
+                                timeline.trimStartTo(ratio * timeline.outputDurationMs)
+                            else
+                                timeline.trimEndTo(ratio * timeline.outputDurationMs)
+                        }
+                    }
+                }
+            }
+
             // The playhead. Drawn last so it is never hidden behind a segment.
             Item {
                 x: root.stripLeft + timeline.playheadRatio * root.stripWidth - 1
@@ -170,13 +229,6 @@ Item {
                     x: -3.5
                     color: Theme.accent
                 }
-            }
-
-            MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onPressed: mouse => root.timeAtX(mouse.x)
-                onPositionChanged: mouse => { if (pressed) root.timeAtX(mouse.x) }
             }
         }
 

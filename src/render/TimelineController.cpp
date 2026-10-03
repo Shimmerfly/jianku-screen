@@ -130,6 +130,63 @@ bool TimelineController::removeAroundPlayhead(double spanMs) {
     return removeRange(from, to);
 }
 
+bool TimelineController::trimStartTo(double outputMs) {
+    if (!timeline_.valid())
+        return false;
+    const double snapped = TimelineGeometry::snapToFrame(
+        std::max(0.0, std::min(outputMs, timeline_.outputDurationMs())), frameDurationMs_);
+    if (trimStart(snapped))
+        return true;
+    // A refused trim is usually the minimum-length rule, which is worth saying
+    // plainly: "nothing happened" with no reason reads as a broken handle.
+    setError(QStringLiteral("裁剪后至少要保留 %1 毫秒").arg(100));
+    return false;
+}
+
+bool TimelineController::trimEndTo(double outputMs) {
+    if (!timeline_.valid())
+        return false;
+    const double snapped = TimelineGeometry::snapToFrame(
+        std::max(0.0, std::min(outputMs, timeline_.outputDurationMs())), frameDurationMs_);
+    if (trimEnd(snapped))
+        return true;
+    setError(QStringLiteral("裁剪后至少要保留 %1 毫秒").arg(100));
+    return false;
+}
+
+bool TimelineController::setSpeedAtPlayhead(double rate) {
+    if (!timeline_.valid())
+        return false;
+    if (!(rate > 0.0)) {
+        setError(QStringLiteral("播放速度必须大于 0"));
+        return false;
+    }
+    const double at = snappedPlayheadMs();
+    const double duration = timeline_.outputDurationMs();
+    // The whole segment the playhead is inside, found from the segment list so the
+    // range matches exactly what the strip draws. Using a nominal span instead would
+    // leave a sliver at real time next to the retimed part.
+    double start = 0.0;
+    double end = duration;
+    for (const QVariant &value : segments()) {
+        const QVariantMap segment = value.toMap();
+        const double segmentStart = segment.value(QStringLiteral("outputStartMs")).toDouble();
+        const double segmentEnd = segment.value(QStringLiteral("outputEndMs")).toDouble();
+        // Half-open, with the very end belonging to the last segment: at the end of
+        // the timeline the playhead must still retime something.
+        if (at >= segmentStart - 1e-6 && (at < segmentEnd - 1e-6 || segmentEnd >= duration - 1e-6)) {
+            start = segmentStart;
+            end = segmentEnd;
+            break;
+        }
+    }
+    if (end - start <= 1e-6) {
+        setError(QStringLiteral("播放头所在的片段长度为零，无法变速"));
+        return false;
+    }
+    return setSpeed(start, end, rate);
+}
+
 void TimelineController::clampPlayhead() {
     const double limit = std::max(0.0, timeline_.outputDurationMs());
     const double clamped = std::clamp(playheadMs_, 0.0, limit);

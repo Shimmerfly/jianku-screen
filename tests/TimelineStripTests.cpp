@@ -1,10 +1,17 @@
 // Edit-strip QML checks.
 //
 // The strip is only exercised once a project is loaded: without one it hides, so an
-// ordinary app launch evaluates almost none of its bindings. A broken binding in
-// QML prints a warning and renders nothing rather than failing to load, which is
-// exactly how a timeline ends up silently blank — so the test instantiates the real
-// component against a real controller and fails on any QML warning.
+// ordinary app launch evaluates almost none of its bindings. A broken binding in QML
+// prints a warning and renders nothing rather than failing to load, which is exactly
+// how a timeline ends up silently blank — so the test instantiates the real
+// component against a real controller, in a window so the bindings are actually
+// evaluated, and fails on any QML warning.
+//
+// What this does *not* catch, measured rather than assumed: reading a property that
+// does not exist (`timeline.playheadLabelTypo`) produces no warning at all in Qt
+// 6.11 — it evaluates to undefined. Only a call of a missing *function*, reached at
+// run time, warns. So this test guards the bindings that do run, and the rest of the
+// strip's correctness rests on the controller tests, which have the arithmetic.
 #include "../src/render/TimelineController.h"
 
 #include <QGuiApplication>
@@ -18,6 +25,7 @@
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickStyle>
+#include <QQuickWindow>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <iostream>
@@ -140,10 +148,21 @@ int main(int argc, char **argv) {
         require(!controller.segments().isEmpty(), "the strip has segments");
         require(root->property("stripReady").toBool(), "the strip reports itself ready");
 
-        // Let the event loop turn so the delegates are created and polished: a
-        // warning from inside a delegate only appears once the delegate exists.
-        for (int i = 0; i < 20; ++i)
+        // A window is needed for two reasons. Delegates are only created once the
+        // item is polished/rendered, and a binding error is reported when the binding
+        // is evaluated rather than when the file loads — without this, a broken
+        // binding passes silently, which is the whole failure mode being tested for.
+        QQuickWindow window;
+        window.resize(900, 200);
+        item->setParentItem(window.contentItem());
+        item->setWidth(900);
+        item->setHeight(200);
+        window.show();
+        for (int i = 0; i < 30; ++i) {
             QCoreApplication::processEvents();
+            window.update();
+        }
+        window.hide();
 
         // Now exercise the state changes the strip has to survive.
         controller.splitAtPlayhead();

@@ -76,6 +76,13 @@ public:
     // different time than the one it is showing.
     Q_INVOKABLE bool splitAtPlayhead();
     Q_INVOKABLE bool removeAroundPlayhead(double spanMs);
+    // Trims the head/tail to the given output time, snapping to a frame first so a
+    // dragged handle lands on a frame boundary rather than between two.
+    Q_INVOKABLE bool trimStartTo(double outputMs);
+    Q_INVOKABLE bool trimEndTo(double outputMs);
+    // Retimes the segment under the playhead. A whole-timeline speed change is the
+    // common case, so an unset range means "the segment at the playhead".
+    Q_INVOKABLE bool setSpeedAtPlayhead(double rate);
 
     const Project::EditTimeline &timeline() const { return timeline_; }
 
