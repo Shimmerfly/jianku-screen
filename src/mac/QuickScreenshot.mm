@@ -3,6 +3,8 @@
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <CoreGraphics/CoreGraphics.h>
 
+#include "../render/CanvasRenderer.h"
+
 #include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
@@ -10,7 +12,6 @@
 #include <QImage>
 #include <QMetaObject>
 #include <QPainter>
-#include <QPainterPath>
 #include <QPointer>
 #include <QDebug>
 #include <QStandardPaths>
@@ -34,32 +35,32 @@ QImage imageFromCG(CGImageRef source) {
     return image;
 }
 
-QString saveComposed(const QImage &source, const QVariantMap &options) {
+// Composes the screenshot through the same CanvasRenderer the preview and the
+// offline compositor use. Before this it had its own copy of the padding maths and
+// knew only about a flat colour, so choosing a gradient or a built-in background
+// produced a screenshot that looked nothing like the preview.
+QString saveComposed(const QImage &source, const QVariantMap &options, const QString &backgroundRoot) {
     if (source.isNull()) return QStringLiteral("截图为空");
-    const double ratio = std::clamp(options.value("backgroundPaddingRatio").toDouble(), 0.0, 40.0) / 100.0;
-    const int padding = qRound(std::min(source.width(), source.height()) * ratio / (1.0 - 2.0 * ratio));
-    QImage result(source.width() + 2 * padding, source.height() + 2 * padding,
-                  QImage::Format_ARGB32_Premultiplied);
-    result.fill(QColor(options.value("backgroundColor", "#1c2630").toString()));
+    const Render::CanvasStyle style = Render::canvasStyleFromMap(options, backgroundRoot);
+    // No canvas size: the image grows to make room for the padding, which is the
+    // one place the layout rule is solved from the content instead of the canvas.
+    const Render::CanvasPlan plan = Render::planCanvas(style, QSizeF(),
+        QSizeF(source.width(), source.height()));
+    if (!plan.valid) return QStringLiteral("截图合成失败：") + plan.error;
+
+    QImage result(plan.width(), plan.height(), QImage::Format_ARGB32_Premultiplied);
+    result.fill(Qt::transparent);
     QPainter painter(&result);
     painter.setRenderHint(QPainter::Antialiasing);
-    if (options.value("backgroundType").toString() == "image") {
-        QImage background(options.value("backgroundImagePath").toString());
-        if (!background.isNull()) {
-            const QSize size = background.size().scaled(result.size(), Qt::KeepAspectRatioByExpanding);
-            const QRect target((result.width() - size.width()) / 2,
-                               (result.height() - size.height()) / 2,
-                               size.width(), size.height());
-            painter.drawImage(target, background);
-        }
-    }
-    QPainterPath rounded;
-    const QRectF inner(padding, padding, source.width(), source.height());
-    rounded.addRoundedRect(inner, options.value("windowBorderRadius").toDouble(),
-                           options.value("windowBorderRadius").toDouble());
-    painter.setClipPath(rounded);
-    painter.drawImage(inner.topLeft(), source);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+    Render::drawCanvasBackdrop(painter, plan);
+    Render::beginFrame(painter, plan, QColor(QString::fromLatin1(Render::kFrameColor)));
+    const QRectF content = plan.layout.contentRect.translated(-plan.layout.frameRect.topLeft());
+    painter.drawImage(content, source);
+    Render::drawInsetBorder(painter, plan);
+    Render::endFrame(painter, plan);
     painter.end();
+
     QString directory = options.value("screenshotDirectory").toString();
     if (directory.isEmpty())
         directory = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)
@@ -112,7 +113,8 @@ void QuickScreenshot::capture(const QVariantMap &options) {
                 completionHandler:^(CGImageRef image, NSError *captureError) {
                     const QString result = captureError
                         ? QStringLiteral("截图失败：") + QString::fromNSString(captureError.localizedDescription)
-                        : saveComposed(imageFromCG(image), frozenOptions);
+                        : saveComposed(imageFromCG(image), frozenOptions,
+                              QStringLiteral(JIANKU_SOURCE_DIR "/assets/backgrounds"));
                     qInfo() << "Jianku screenshot result" << result;
                     QMetaObject::invokeMethod(qApp, [self, result] {
                         if (self) self->setStatus(result);

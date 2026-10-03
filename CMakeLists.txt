@@ -34,6 +34,8 @@ qt_add_executable(jianku-screen MACOSX_BUNDLE
     src/render/CanvasLayout.h
     src/render/CanvasRenderer.cpp
     src/render/CanvasRenderer.h
+    src/render/CanvasPreview.cpp
+    src/render/CanvasPreview.h
     src/render/ExportController.cpp
     src/render/ExportController.h
     src/animation/AnimationSettings.cpp
@@ -105,6 +107,13 @@ if(BUILD_TESTING)
     add_executable(capture-source-tests tests/CaptureSourceTests.cpp src/capture/CaptureSource.cpp)
     target_link_libraries(capture-source-tests PRIVATE Qt6::Core)
     add_test(NAME capture-source COMMAND capture-source-tests)
+
+    add_executable(canvas-renderer-tests tests/CanvasRendererTests.cpp
+        src/render/CanvasRenderer.cpp src/render/CanvasLayout.cpp)
+    target_link_libraries(canvas-renderer-tests PRIVATE Qt6::Core Qt6::Gui)
+    target_compile_definitions(canvas-renderer-tests PRIVATE
+        JIANKU_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME canvas-renderer COMMAND canvas-renderer-tests)
 
     add_executable(motion-blur-tests tests/MotionBlurTests.cpp src/render/MotionBlur.cpp)
     target_link_libraries(motion-blur-tests PRIVATE Qt6::Core Qt6::Gui)

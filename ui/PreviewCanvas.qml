@@ -6,6 +6,11 @@ import Jianku.Screen
 // Real-time compositing preview: background (colour / gradient / image) + padding +
 // rounded corners + inset + shadow, with the live capture inside the content frame.
 // The same component is reused by the audience/output window.
+//
+// Every rectangle here is a *fraction* of the canvas, computed once by
+// CanvasPreview from the same C++ layout the export and the screenshot use. The
+// values are not recomputed in QML: that is what previously made the preview's
+// padding, corners and background disagree with the finished film.
 Item {
     id: root
     property var options: settings.current
@@ -13,19 +18,8 @@ Item {
     property bool showStageShadow: true
     property real stageMargin: 22
 
-    readonly property string aspectKey: String(options.outputAspectRatio || "auto")
-    readonly property real aspect: aspectKey === "9:16" ? 0.5625
-        : aspectKey === "1:1" ? 1.0
-        : aspectKey === "4:3" ? 1.3333
-        : aspectKey === "16:10" ? 1.6
-        : aspectKey === "21:9" ? 2.3333
-        : aspectKey === "auto" ? (anim.contentHeight > 0 ? anim.contentWidth / anim.contentHeight : 1.7778)
-        : 1.7778
-
-    readonly property real padRatio: Math.max(0, Number(options.backgroundPaddingRatio || 0))
-    readonly property real radius: Math.max(0, Number(options.windowBorderRadius || 0))
-    readonly property real insetSize: Math.max(0, Number(options.insetSize || 0))
-    readonly property real blurAmount: Math.min(1.0, Math.max(0, Number(options.backgroundBlur || 0)) / 40)
+    readonly property var plan: canvasPreview
+    readonly property real aspect: Math.max(0.05, plan.aspect)
     readonly property real shadowIntensity: Math.max(0, Number(options.shadowIntensity || 0))
     readonly property real shadowAngle: Number(options.shadowAngle || 90)
     readonly property real shadowDistance: Number(options.shadowDistance || 0)
@@ -64,14 +58,15 @@ Item {
             autoPaddingEnabled: true
         }
 
-        // Canvas: the output frame at the requested aspect ratio.
+        // Canvas: the whole output frame. The camera moves the *content* inside
+        // it, never the canvas itself.
         Rectangle {
             id: canvas
             x: Math.round((stage.width - stage.w) / 2)
             y: Math.round((stage.height - stage.h) / 2)
             width: Math.round(stage.w)
             height: Math.round(stage.h)
-            radius: 10
+            radius: Math.round(root.plan.radiusRatio * height)
             clip: true
             color: "#0c0c0e"
 
@@ -82,35 +77,38 @@ Item {
                 visible: false
                 clip: true
 
+                // Colours come from the same resolved style the export uses, so a
+                // background cannot look one way in the preview and another in the
+                // finished file.
                 Rectangle {
                     anchors.fill: parent
-                    visible: String(root.options.backgroundType) === "color"
-                    color: String(root.options.backgroundColor || "#1b2230")
+                    visible: root.plan.backgroundType !== "gradient"
+                        && root.plan.backgroundType !== "image"
+                        && root.plan.backgroundType !== "system"
+                    color: root.plan.backgroundColor
                 }
 
                 Rectangle {
                     anchors.centerIn: parent
-                    visible: String(root.options.backgroundType || "gradient") === "gradient"
+                    visible: root.plan.backgroundType === "gradient"
                     width: Math.hypot(parent.width, parent.height)
                     height: Math.hypot(parent.width, parent.height)
-                    rotation: Number(root.options.gradientAngle || 135)
+                    rotation: root.plan.gradientAngle
                     gradient: Gradient {
                         orientation: Gradient.Horizontal
-                        GradientStop { position: 0.0; color: String(root.options.gradientStartColor || "#3F37C9") }
-                        GradientStop { position: 1.0; color: String(root.options.gradientEndColor || "#8C87DF") }
+                        GradientStop { position: 0.0; color: root.plan.gradientStart }
+                        GradientStop { position: 1.0; color: root.plan.gradientEnd }
                     }
                 }
 
                 Image {
                     anchors.fill: parent
-                    visible: {
-                        const t = String(root.options.backgroundType)
-                        return t === "image" || t === "system"
-                    }
+                    visible: root.plan.backgroundType === "image"
+                        || root.plan.backgroundType === "system"
                     source: {
-                        const t = String(root.options.backgroundType)
-                        if (t === "system")
-                            return backgrounds.urlFor(String(root.options.backgroundSystemName || ""))
+                        if (root.plan.backgroundType === "system")
+                            return canvasPreview.backgroundUrl(
+                                String(root.options.backgroundSystemName || ""))
                         const p = String(root.options.backgroundImagePath || "")
                         return p.length > 0 ? "file://" + p : ""
                     }
@@ -122,19 +120,20 @@ Item {
             MultiEffect {
                 source: backgroundLayer
                 anchors.fill: backgroundLayer
-                blurEnabled: root.blurAmount > 0.001
-                blur: root.blurAmount
+                blurEnabled: root.plan.backgroundBlur > 0.001
+                blur: root.plan.backgroundBlur
                 blurMax: 64
                 autoPaddingEnabled: true
             }
 
-            // Content frame.
+            // Content frame, straight from the shared layout (frameRect is the
+            // outer frame; the source is contained inside it).
             Item {
                 id: frameHost
-                x: Math.round(canvas.width * root.padRatio / 100)
-                y: Math.round(canvas.height * root.padRatio / 100)
-                width: Math.max(1, canvas.width - x * 2)
-                height: Math.max(1, canvas.height - y * 2)
+                x: Math.round(root.plan.frameRect.x * canvas.width)
+                y: Math.round(root.plan.frameRect.y * canvas.height)
+                width: Math.max(1, Math.round(root.plan.frameRect.width * canvas.width))
+                height: Math.max(1, Math.round(root.plan.frameRect.height * canvas.height))
 
                 Rectangle {
                     id: frame
@@ -144,7 +143,7 @@ Item {
                     y: frame.camOffsetY * frame.fitScale
                     width: parent.width
                     height: parent.height
-                    radius: root.radius
+                    radius: Math.round(root.plan.radiusRatio * height)
                     clip: true
                     color: "#101013"
                     transformOrigin: Item.TopLeft
@@ -164,7 +163,7 @@ Item {
                     Rectangle {
                         id: frameMask
                         anchors.fill: parent
-                        radius: root.radius
+                        radius: Math.round(root.plan.radiusRatio * height)
                         color: "white"
                         visible: false
                         layer.enabled: true
@@ -217,15 +216,12 @@ Item {
                     // Inset border drawn inside the frame edge.
                     Rectangle {
                         anchors.fill: parent
-                        visible: root.insetSize > 0.01
+                        visible: root.plan.insetRatio * canvas.height > 0.5
                         color: "transparent"
                         radius: frame.radius
-                        border.width: root.insetSize
-                        border.color: Qt.rgba(
-                            Qt.color(String(root.options.insetColor || "#000000")).r,
-                            Qt.color(String(root.options.insetColor || "#000000")).g,
-                            Qt.color(String(root.options.insetColor || "#000000")).b,
-                            Math.max(0, Math.min(1, Number(root.options.insetAlpha || 0.5))))
+                        border.width: root.plan.insetRatio * canvas.height
+                        border.color: Qt.rgba(root.plan.insetColor.r, root.plan.insetColor.g,
+                            root.plan.insetColor.b, root.plan.insetAlpha)
                     }
                 }
 

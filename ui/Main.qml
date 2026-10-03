@@ -105,13 +105,27 @@ ApplicationWindow {
         }
     }
 
+    // The canvas layout is computed once, in C++, and shared with the export and
+    // the screenshot. QML only maps the resulting fractions onto its stage.
+    function refreshCanvas() {
+        canvasPreview.update(settings.current, anim.contentWidth, anim.contentHeight)
+    }
+
     Component.onCompleted: {
         anim.setSettings(settings.current)
         anim.start()
+        refreshCanvas()
     }
     Connections {
         target: settings
-        function onCurrentChanged() { anim.setSettings(settings.current) }
+        function onCurrentChanged() {
+            anim.setSettings(settings.current)
+            refreshCanvas()
+        }
+    }
+    Connections {
+        target: anim
+        function onContentSizeChanged() { root.refreshCanvas() }
     }
     Connections {
         target: capture

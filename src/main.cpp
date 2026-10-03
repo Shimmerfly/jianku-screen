@@ -3,6 +3,7 @@
 #include "mac/QuickScreenshot.h"
 #include "mac/GlobalHotkey.h"
 #include "mac/MacWindowStyle.h"
+#include "render/CanvasPreview.h"
 #include "render/ExportController.h"
 #include "render/VideoSurface.h"
 #include "settings/BackgroundLibrary.h"
@@ -39,6 +40,7 @@ int main(int argc, char *argv[]) {
     QuickScreenshot screenshot;
     GlobalHotkey hotkey;
     Render::ExportController exporter;
+    Render::CanvasPreview canvasPreview;
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("capture"), &capture);
     engine.rootContext()->setContextProperty(QStringLiteral("settings"), &settings);
@@ -50,6 +52,7 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty(QStringLiteral("screenshot"), &screenshot);
     engine.rootContext()->setContextProperty(QStringLiteral("hotkey"), &hotkey);
     engine.rootContext()->setContextProperty(QStringLiteral("exporter"), &exporter);
+    engine.rootContext()->setContextProperty(QStringLiteral("canvasPreview"), &canvasPreview);
     // The exporter always targets the project the user just recorded.
     QObject::connect(&capture, &MacCapture::lastRecordingPathChanged, &exporter, [&] {
         exporter.setProjectDirectory(capture.lastProjectPath());
