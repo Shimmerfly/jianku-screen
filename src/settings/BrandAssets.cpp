@@ -4,6 +4,9 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QImage>
+#include <QPainter>
+#include <QPen>
+#include <QPixmap>
 #include <QSize>
 
 namespace Branding {
@@ -71,13 +74,46 @@ QIcon mark(int size) {
 }
 
 QIcon menuBarIcon() {
-    const QString path = QDir(brandingDirectory()).filePath(QStringLiteral("jianku-menubar.png"));
-    if (path.isEmpty() || !QFileInfo::exists(path))
-        return {};
+    // Drawn, not scaled. A menu bar template is defined by its alpha and painted in a
+    // single colour by macOS, so what matters is the silhouette at 18-22 pt — and the
+    // app icon's silhouette is unusable there. This draws the logo's idea directly:
+    // a screen frame with a record dot, in strokes thick enough to survive the size.
+    //
+    // Geometry is in a 22x22 box (the menu bar height) and inset by 2 so the glyph does
+    // not touch neighbouring items. `devicePixelRatio` variants are added because a
+    // vector path rasterised at 1x on a Retina display is the one thing that would
+    // still look soft; QIcon picks the right one.
+    constexpr int kBox = 22;
     QIcon icon;
-    icon.addFile(path, QSize(22, 22));
-    // Tells macOS to treat it as a template so it inverts with the menu bar. Qt maps
-    // QIcon::isMask() onto the NSImage template flag.
+    for (const int scale : {1, 2}) {
+        QPixmap pixmap(kBox * scale, kBox * scale);
+        pixmap.setDevicePixelRatio(scale);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        // Black: for a mask the colour is irrelevant, only the alpha is read.
+        QPen pen(Qt::black);
+        pen.setWidthF(2.0);
+        pen.setJoinStyle(Qt::RoundJoin);
+        pen.setCapStyle(Qt::RoundCap);
+        painter.setPen(pen);
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(QRectF(2.5, 4.5, 17.0, 13.0), 3.0, 3.0);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(Qt::black);
+        painter.drawEllipse(QPointF(7.5, 9.0), 1.9, 1.9);
+        // The tile's diagonal ribbons, reduced to the one stroke that reads as motion
+        // without closing the frame into a filled shape.
+        QPen slash(Qt::black);
+        slash.setWidthF(1.6);
+        slash.setCapStyle(Qt::RoundCap);
+        painter.setPen(slash);
+        painter.drawLine(QPointF(13.5, 13.6), QPointF(16.4, 10.7));
+        painter.end();
+        icon.addPixmap(pixmap);
+    }
+    // Qt maps QIcon::isMask() onto NSImage's template flag, which is what tells macOS
+    // to invert the glyph for a dark menu bar.
     icon.setIsMask(true);
     return icon;
 }

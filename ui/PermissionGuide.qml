@@ -176,6 +176,11 @@ Item {
                         width: 92
                         height: 92
                         anchors.horizontalCenter: parent.horizontalCenter
+                        // Transparent, explicitly. A Rectangle with no `color` is
+                        // WHITE by default, which put a white box behind a logo that
+                        // has its own transparent margin and made the mark look like
+                        // a sticker on a card.
+                        color: "transparent"
                         // The real application mark: this tile is described as the icon
                         // to drag into the system settings list, so it has to look like
                         // the icon the user will find there.

@@ -113,17 +113,12 @@ int main(int argc, char *argv[]) {
     QObject::connect(&app, &QGuiApplication::lastWindowClosed,
                      &capture, &MacCapture::stop);
 
-    // The real brand mark. It was a hand-drawn placeholder rectangle before the
-    // logo existed; the tray and the menu bar both use it now.
-    // The menu bar gets the coloured mark rather than the template silhouette. The
-    // silhouette reads better in principle — macOS inverts a template to match the
-    // menu bar — but measured here it is a filled rounded square with the gaps the
-    // four ribbons leave between them: at 22 pt it looks like a bruised blob, not a
-    // mark. The coloured icon is recognisable, and its contrast is fine on a light
-    // menu bar (mean luminance 64 against 240) and merely low on a dark one (64
-    // against 28). `Branding::menuBarIcon()` stays available for a future mark that
-    // is designed as a silhouette.
-    const QIcon trayIcon = Branding::mark();
+    // The menu bar mark is a template image, like every other macOS status item: a
+    // single-colour glyph that the system paints black or white to match the menu bar.
+    // The coloured app icon was tried here first and is wrong for the spot — it is a
+    // small picture among monochrome symbols, and on a dark menu bar its dark tile
+    // nearly disappears against the bar.
+    const QIcon trayIcon = Branding::menuBarIcon();
     QSystemTrayIcon tray{trayIcon};
     QMenu trayMenu;
     QAction *openAction = trayMenu.addAction(QStringLiteral("打开简库镜传"));

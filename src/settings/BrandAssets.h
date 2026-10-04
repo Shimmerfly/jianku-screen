@@ -29,8 +29,15 @@ namespace Branding {
 QIcon mark(int size = 0);
 
 // The menu bar template: a shape whose alpha macOS paints black or white to match the
-// menu bar. Set on a QAction/QSystemTrayIcon to get the automatic behaviour; used as a
-// plain icon it renders black, which is why the tray keeps the coloured mark.
+// menu bar. Drawn as a vector path at whatever size is asked for, then flagged as a
+// mask, which is what makes macOS treat it as a template image.
+//
+// It is a glyph, not a shrunken copy of the app icon. The app icon is a rounded tile
+// with four coloured ribbons and a dark screen inside; scaled to 22 px and flattened
+// to one colour those ribbons merge into a blob with a hole in it (measured: at 22 pt
+// the silhouette is unreadable). A menu bar mark has to survive being one colour and
+// one weight, so this is the logo's *idea* — a screen frame and a record dot — drawn
+// in strokes that stay separate at that size.
 QIcon menuBarIcon();
 
 // Absolute path to the branding directory, or empty when it cannot be found.
