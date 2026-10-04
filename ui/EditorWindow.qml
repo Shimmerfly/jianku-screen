@@ -256,37 +256,14 @@ Window {
         onAccepted: registry.openProject(selectedFolder.toString().replace(/^file:\/\//, ""), false)
     }
 
-    // ⌘W closes the tab, not the window, while there is something to close. Closing the
-    // last tab closes the window, which is what a tabbed editor everywhere does.
-    Shortcut {
-        sequences: [StandardKey.Close]
-        onActivated: {
-            if (editor.session)
-                registry.closeTab(editor.editorWindowId, editor.session.projectDirectory)
-            else
-                editor.close()
-        }
-    }
-    Shortcut {
-        sequences: [StandardKey.Save]
-        onActivated: registry.saveActive()
-    }
-    Shortcut {
-        sequences: [StandardKey.New]
-        onActivated: registry.newWindow()
-    }
-    Shortcut {
-        sequences: [StandardKey.Open]
-        onActivated: openDialog.open()
-    }
-    Shortcut {
-        sequences: [StandardKey.Undo]
-        onActivated: registry.undoActive()
-    }
-    Shortcut {
-        sequences: [StandardKey.Redo]
-        onActivated: registry.redoActive()
-    }
+    // No Shortcut items for ⌘N/⌘O/⌘S/⌘W/⌘Z here.
+    //
+    // They are defined once, in the C++ application menu (src/mac/AppMenu.cpp). macOS has
+    // one menu bar for the whole process, and a menu shortcut beats a QML Shortcut with
+    // the same key — so declaring both is how you get an accelerator that fires twice or
+    // not at all. The menu is the single definition, and it is also where the user can
+    // see what the shortcuts are.
+
     // The global shortcuts above act on the *active* window, so this window has to tell
     // the registry when it becomes it.
     onActiveChanged: if (active) registry.noteActiveWindow(editor)

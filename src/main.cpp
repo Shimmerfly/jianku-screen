@@ -2,6 +2,7 @@
 #include "mac/MacCapture.h"
 #include "mac/QuickScreenshot.h"
 #include "mac/GlobalHotkey.h"
+#include "mac/AppMenu.h"
 #include "mac/MacWindowStyle.h"
 #include "project/RecentProjects.h"
 #include "render/CanvasPreview.h"
@@ -98,6 +99,9 @@ int main(int argc, char *argv[]) {
     if (capture.lastProjectPath().isEmpty())
         capture.openProject(RecentProjects::mostRecent(RecentProjects::recordingDirectory(
             settings.current().value("recordingDirectory").toString())));
+    // Installed before the first window so the menu bar is there from the start: a menu
+    // that appears only after a window opens reads as a glitch.
+    installApplicationMenu(&registry);
     engine.loadFromModule("Jianku.Screen", "Main");
     if (engine.rootObjects().isEmpty())
         return 1;

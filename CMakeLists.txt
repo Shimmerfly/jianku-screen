@@ -75,6 +75,8 @@ qt_add_executable(jianku-screen MACOSX_BUNDLE
     src/mac/GlobalHotkey.h
     src/mac/MacWindowStyle.mm
     src/mac/MacWindowStyle.h
+    src/mac/AppMenu.cpp
+    src/mac/AppMenu.h
     src/mac/MacCapture.mm
     src/mac/MacCapture.h
     src/mac/MicrophoneRecorder.mm
