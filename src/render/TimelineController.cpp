@@ -1,5 +1,6 @@
 #include "TimelineController.h"
 
+#include "../project/EditSidecar.h"
 #include "ProjectCompositor.h"
 
 #include <QDir>
@@ -223,16 +224,43 @@ bool TimelineController::load(const QString &projectDirectory) {
         return false;
     }
     projectDirectory_ = projectDirectory;
+    projectCreatedAt_ = project.createdAt;
     timeline_ = Project::EditTimeline::whole(project.durationMs);
     undo_.clear();
     redo_.clear();
     loaded_ = timeline_.valid();
     setError(loaded_ ? QString() : timeline_.error());
     playheadMs_ = 0.0;
+
+    // A saved edit is applied on top of the whole-recording timeline. Until this
+    // existed, `load()` reset every split, trim and speed change, so closing the app
+    // silently threw the edit away — and `EditTimeline::toJson()`/`fromJson()` had no
+    // callers at all.
+    const Project::EditSidecar sidecar = Project::load(projectDirectory, project.durationMs);
+    if (sidecar.valid && sidecar.timeline.valid()) {
+        // A sidecar from a different recording that happens to reuse the directory
+        // name is refused rather than applied to the wrong film.
+        const bool sameProject = sidecar.projectCreatedAt.isEmpty()
+            || projectCreatedAt_.isEmpty()
+            || sidecar.projectCreatedAt == projectCreatedAt_;
+        if (sameProject) {
+            timeline_ = sidecar.timeline;
+            playheadMs_ = std::clamp(sidecar.playheadMs, 0.0, timeline_.outputDurationMs());
+        } else {
+            setError(QStringLiteral("编辑记录属于另一个工程，已忽略"));
+        }
+    } else if (!sidecar.error.isEmpty()) {
+        // Reported, not fatal: the recording still opens, with the edit ignored.
+        setError(sidecar.error);
+    }
+    // The baseline is what is on disk now, so a freshly opened project is clean even
+    // though its timeline is no longer the identity.
+    savedSnapshot_ = snapshot();
     emit changed();
     emit rulerChanged();
     emit playheadChanged();
     emit timelineChanged();
+    emit dirtyChanged();
     return loaded_;
 }
 
@@ -241,6 +269,8 @@ void TimelineController::clear() {
     undo_.clear();
     redo_.clear();
     projectDirectory_.clear();
+    projectCreatedAt_.clear();
+    savedSnapshot_.clear();
     loaded_ = false;
     playheadMs_ = 0.0;
     setError(QString());
@@ -248,6 +278,37 @@ void TimelineController::clear() {
     emit rulerChanged();
     emit playheadChanged();
     emit timelineChanged();
+}
+
+QByteArray TimelineController::snapshot() const {
+    if (!timeline_.valid())
+        return {};
+    // Compact, and only the timeline: the playhead is deliberately excluded. Moving
+    // the playhead is not an edit, and folding it in would make every scrub mark the
+    // project dirty.
+    return QJsonDocument(timeline_.toJson()).toJson(QJsonDocument::Compact);
+}
+
+bool TimelineController::dirty() const {
+    if (!loaded_)
+        return false;
+    return snapshot() != savedSnapshot_;
+}
+
+bool TimelineController::save() {
+    if (!loaded_ || projectDirectory_.isEmpty()) {
+        setError(QStringLiteral("没有可保存的工程"));
+        return false;
+    }
+    QString failure;
+    if (!Project::save(projectDirectory_, timeline_, playheadMs_, projectCreatedAt_, &failure)) {
+        setError(failure);
+        return false;
+    }
+    savedSnapshot_ = snapshot();
+    setError(QString());
+    emit dirtyChanged();
+    return true;
 }
 
 template <typename Change>
@@ -273,6 +334,7 @@ bool TimelineController::apply(const QString &failureMessage, Change &&change) {
     emit changed();
     emit rulerChanged();
     emit timelineChanged();
+    emit dirtyChanged();
     return true;
 }
 
@@ -316,6 +378,7 @@ void TimelineController::reset() {
     timeline_ = Project::EditTimeline::whole(timeline_.sourceDurationMs());
     setError(QString());
     clampPlayhead();
+    emit dirtyChanged();
     emit changed();
     emit rulerChanged();
     emit timelineChanged();
@@ -332,6 +395,7 @@ void TimelineController::undo() {
     emit changed();
     emit rulerChanged();
     emit timelineChanged();
+    emit dirtyChanged();
 }
 
 void TimelineController::redo() {
@@ -345,6 +409,7 @@ void TimelineController::redo() {
     emit changed();
     emit rulerChanged();
     emit timelineChanged();
+    emit dirtyChanged();
 }
 
 } // namespace Render

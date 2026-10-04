@@ -4,6 +4,7 @@
 
 #include "TimelineGeometry.h"
 
+#include <QByteArray>
 #include <QObject>
 #include <QVariantList>
 #include <QString>
@@ -28,6 +29,11 @@ class TimelineController final : public QObject {
     Q_PROPERTY(bool edited READ edited NOTIFY changed)
     Q_PROPERTY(bool canUndo READ canUndo NOTIFY changed)
     Q_PROPERTY(bool canRedo READ canRedo NOTIFY changed)
+    // Whether the timeline differs from what is stored on disk. Separate from
+    // `edited`, which means "the export would differ from the recording": a split
+    // changes nothing about the film but is still an edit that should be saved, and
+    // undoing back to the saved state has to read as clean again.
+    Q_PROPERTY(bool dirty READ dirty NOTIFY dirtyChanged)
     Q_PROPERTY(QString projectDirectory READ projectDirectory NOTIFY changed)
     Q_PROPERTY(double sourceDurationMs READ sourceDurationMs NOTIFY changed)
     Q_PROPERTY(double outputDurationMs READ outputDurationMs NOTIFY changed)
@@ -53,7 +59,9 @@ public:
     bool edited() const { return !timeline_.playsWholeRecording(); }
     bool canUndo() const { return !undo_.empty(); }
     bool canRedo() const { return !redo_.empty(); }
+    bool dirty() const;
     QString projectDirectory() const { return projectDirectory_; }
+    QString projectCreatedAt() const { return projectCreatedAt_; }
     double sourceDurationMs() const { return timeline_.sourceDurationMs(); }
     double outputDurationMs() const { return timeline_.outputDurationMs(); }
     QVariantList segments() const;
@@ -86,10 +94,16 @@ public:
 
     const Project::EditTimeline &timeline() const { return timeline_; }
 
-    // Reads the recording's length from the project. Called when a recording
-    // finishes; an empty or unreadable directory clears the timeline.
+    // Reads the recording's length from the project, then applies any saved edit
+    // (`edit.json`). Called when a recording finishes; an empty or unreadable
+    // directory clears the timeline.
     Q_INVOKABLE bool load(const QString &projectDirectory);
     Q_INVOKABLE void clear();
+    // Writes the edit sidecar. Returns false and reports through `error` on failure.
+    Q_INVOKABLE bool save();
+    // The recording's `createdAt`, kept so the sidecar can refuse to attach to a
+    // different project that happens to share the directory name.
+    Q_PROPERTY(QString projectCreatedAt READ projectCreatedAt NOTIFY changed)
 
     // --- operations, all in output time -----------------------------------
     Q_INVOKABLE bool splitAt(double outputMs);
@@ -105,6 +119,7 @@ public:
 signals:
     void changed();
     void errorChanged();
+    void dirtyChanged();
     void playheadChanged();
     void rulerChanged();
     // Emitted for every successful change, so the exporter can pick the timeline up.
@@ -117,6 +132,9 @@ private:
     bool apply(const QString &failureMessage, Change &&change);
 
     void setError(const QString &message);
+    // The timeline serialised for the dirty comparison. Kept in memory so "undo back
+    // to the saved state" reads as clean, which a boolean "was saved" cannot express.
+    QByteArray snapshot() const;
     // Clamps the playhead to the timeline and announces it only when it moved.
     void clampPlayhead();
 
@@ -124,6 +142,10 @@ private:
     std::vector<Project::EditTimeline> undo_;
     std::vector<Project::EditTimeline> redo_;
     QString projectDirectory_;
+    QString projectCreatedAt_;
+    // The timeline as last loaded or saved, serialised. Comparing against this is what
+    // makes "undo back to where I started" clean again, which a boolean flag cannot do.
+    QByteArray savedSnapshot_;
     QString error_;
     double playheadMs_ = 0.0;
     double frameDurationMs_ = 0.0;

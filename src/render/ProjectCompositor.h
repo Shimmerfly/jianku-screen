@@ -71,6 +71,9 @@ struct ProjectData {
 
     QSizeF sourceSize;          // captured pixels
     double durationMs = 0.0;
+    // The recording's own `createdAt`, copied through so the edit sidecar can refuse
+    // to attach itself to a different recording that happens to share a directory name.
+    QString createdAt;
     qint64 mediaZeroHostNs = 0;
     QString videoFile;
     MicrophoneTrack microphone;

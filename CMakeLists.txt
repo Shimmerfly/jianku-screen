@@ -29,6 +29,8 @@ qt_add_executable(jianku-screen MACOSX_BUNDLE
     src/project/ProjectTimeline.cpp
     src/project/RecentProjects.cpp
     src/project/RecentProjects.h
+    src/project/EditSidecar.cpp
+    src/project/EditSidecar.h
     src/project/EditTimeline.cpp
     src/project/EditTimeline.h
     src/render/ProjectCompositor.cpp
@@ -161,6 +163,7 @@ if(BUILD_TESTING)
     target_sources(timeline-strip-tests PRIVATE
         src/render/TimelineController.cpp src/render/TimelineGeometry.cpp
         src/render/ProjectCompositor.cpp src/project/EditTimeline.cpp
+        src/project/EditSidecar.cpp
         src/render/CanvasLayout.cpp src/render/CanvasRenderer.cpp
         src/render/MotionBlur.cpp src/animation/AnimationSettings.cpp
         src/animation/AutoFocusEngine.cpp src/animation/AutomaticZoom.cpp
@@ -181,7 +184,8 @@ if(BUILD_TESTING)
     add_test(NAME motion-blur COMMAND motion-blur-tests)
 
     add_executable(compositor-tests tests/CompositorTests.cpp
-        src/render/ProjectCompositor.cpp src/project/EditTimeline.cpp src/render/CanvasLayout.cpp
+        src/render/ProjectCompositor.cpp src/project/EditTimeline.cpp src/project/EditSidecar.cpp
+        src/render/CanvasLayout.cpp
         src/render/CanvasRenderer.cpp
         src/animation/AnimationSettings.cpp src/animation/AutoFocusEngine.cpp
         src/animation/AutomaticZoom.cpp src/animation/CursorEngine.cpp
@@ -195,7 +199,7 @@ if(BUILD_TESTING)
 
     add_executable(timeline-controller-tests tests/TimelineControllerTests.cpp
         src/render/TimelineController.cpp src/render/TimelineGeometry.cpp src/render/ProjectCompositor.cpp
-        src/project/EditTimeline.cpp src/render/CanvasLayout.cpp
+        src/project/EditTimeline.cpp src/project/EditSidecar.cpp src/render/CanvasLayout.cpp
         src/render/CanvasRenderer.cpp src/render/MotionBlur.cpp
         src/animation/AnimationSettings.cpp src/animation/AutoFocusEngine.cpp
         src/animation/AutomaticZoom.cpp src/animation/CursorEngine.cpp
@@ -207,6 +211,7 @@ if(BUILD_TESTING)
 
     add_executable(export-controller-tests tests/ExportControllerTests.cpp
         src/render/ExportController.cpp src/render/ProjectCompositor.cpp
+        src/project/EditSidecar.cpp
         src/project/EditTimeline.cpp
         src/render/CanvasLayout.cpp src/render/CanvasRenderer.cpp src/animation/AnimationSettings.cpp
         src/animation/AutoFocusEngine.cpp src/animation/AutomaticZoom.cpp

@@ -119,6 +119,7 @@ ProjectData loadProject(const QString &directory, QString *errorOut) {
         return fail(error);
     const QJsonObject manifest = manifestDocument.object();
     data.settings = manifest.value(QStringLiteral("settings")).toObject().toVariantMap();
+    data.createdAt = manifest.value(QStringLiteral("createdAt")).toString();
 
     const QJsonObject source = manifest.value(QStringLiteral("source")).toObject();
     data.sourceSize = QSizeF(source.value(QStringLiteral("widthPx")).toDouble(),

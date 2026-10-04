@@ -69,6 +69,7 @@ bool writeProject(const QString &directory, double durationMs) {
         return false;
     const QJsonObject manifest{
         {"schemaVersion", 1},
+        {"createdAt", "2026-10-04T07:30:12.345"},
         {"source", QJsonObject{{"type", "display"}, {"widthPx", 1000}, {"heightPx", 500}}},
         {"settings", QJsonObject{{"outputAspectRatio", "auto"}}},
         {"video", QJsonObject{{"file", "raw.mp4"},
@@ -423,6 +424,67 @@ int main(int argc, char **argv) {
             controller.undo();
             controller.redo();
             require(!controller.loaded(), "undo/redo on an empty history is harmless");
+        }
+
+        // --- the edit survives a reload --------------------------------------
+        // Until the sidecar existed, `load()` reset the timeline to the whole
+        // recording every time, so every split and speed change was thrown away when
+        // the app closed — and `EditTimeline::toJson()`/`fromJson()` had no callers.
+        {
+            TimelineController controller;
+            require(controller.load(project), "first load");
+            require(!controller.dirty(), "a freshly opened project is clean");
+            require(controller.splitAt(4000.0), "split");
+            require(controller.setSpeed(0.0, 4000.0, 2.0), "speed up the first half");
+            const double outputDuration = controller.outputDurationMs();
+            require(controller.dirty(), "an edit marks the project dirty");
+            require(controller.save(), "save writes the sidecar");
+            require(!controller.dirty(), "and saving clears the dirty flag");
+            require(QFileInfo::exists(project + "/edit.json"), "the sidecar is in the project");
+
+            // A second controller reading the same directory — i.e. the app restarted.
+            TimelineController reopened;
+            require(reopened.load(project), "reload");
+            require(reopened.segments().size() == controller.segments().size(),
+                "the segment count survives a reload");
+            require(std::abs(reopened.outputDurationMs() - outputDuration) < 0.5,
+                "and so does the edited duration");
+            require(!reopened.dirty(), "a reloaded project is clean, not dirty on open");
+
+            // Undoing back to the saved state has to read as clean again. This is why
+            // the flag is a comparison against a snapshot rather than a boolean.
+            require(reopened.setSpeed(0.0, 2000.0, 0.5), "another edit");
+            require(reopened.dirty(), "which is dirty");
+            reopened.undo();
+            require(!reopened.dirty(), "undo back to the saved snapshot is clean again");
+        }
+
+        // A sidecar that cannot be parsed must not make the recording unopenable: the
+        // project opens with the edit ignored and the reason reported.
+        {
+            QFile broken(project + "/edit.json");
+            require(broken.open(QIODevice::WriteOnly), "write a broken sidecar");
+            broken.write("{ this is not json");
+            broken.close();
+
+            TimelineController controller;
+            require(controller.load(project), "a broken sidecar still opens the project");
+            require(controller.segments().size() == 1, "with the whole recording as the timeline");
+            require(!controller.error().isEmpty(), "and the reason is reported");
+            require(!controller.dirty(), "a project that failed to load an edit is not dirty");
+        }
+
+        // A sidecar whose schema is from the future is refused rather than guessed at.
+        {
+            QFile sidecar(project + "/edit.json");
+            require(sidecar.open(QIODevice::WriteOnly), "write a future schema");
+            sidecar.write(R"({"schema":"jianku-edit/99","playheadMs":1000})");
+            sidecar.close();
+
+            TimelineController controller;
+            require(controller.load(project), "a future schema still opens the project");
+            require(controller.segments().size() == 1, "and is ignored");
+            require(controller.error().contains(QStringLiteral("版本")), "the reason names the schema");
         }
 
         std::cout << "timeline controller checks passed\n";
