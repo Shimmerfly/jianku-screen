@@ -52,17 +52,35 @@ void postToOwner(const std::shared_ptr<CallbackGate> &gate,
     }
 }
 
+// Walks the underlying-error chain, because the outer error is often useless.
+//
+// AVAssetWriter reports a failed append as AVFoundationErrorDomain -11800, "The
+// operation could not be completed" — a sentence that says nothing about what to do.
+// The actionable code is one or two levels down: for the write failures seen here it
+// is NSOSStatusErrorDomain -16341, which is what makes the failure searchable and
+// distinguishable from the other ways -11800 can happen. Without this the recorded
+// project just says -11800 and the cause is unrecoverable after the fact.
 QString errorText(NSError *error) {
     if (!error)
         return QStringLiteral("未知屏幕采集错误");
-    // Some NSErrors carry no useful description ("The operation could not be
-    // completed"), which is what one broken project recorded. Falling back to the
-    // domain and code at least makes the failure identifiable later.
-    const QString description = QString::fromNSString(error.localizedDescription);
-    const QString domain = QString::fromNSString(error.domain);
-    if (description.isEmpty())
-        return QStringLiteral("%1 错误 %2").arg(domain).arg(error.code);
-    return QStringLiteral("%1（%2 %3）").arg(description, domain).arg(error.code);
+    QStringList parts;
+    NSError *current = error;
+    // Bounded: a self-referential chain would otherwise loop forever.
+    for (int depth = 0; current && depth < 4; ++depth) {
+        const QString description = QString::fromNSString(current.localizedDescription);
+        const QString domain = QString::fromNSString(current.domain);
+        parts << (description.isEmpty()
+            ? QStringLiteral("%1 错误 %2").arg(domain).arg(current.code)
+            : QStringLiteral("%1（%2 %3）").arg(description, domain).arg(current.code));
+        current = current.userInfo[NSUnderlyingErrorKey];
+    }
+    // The failure reason is often more specific than the description ("An unknown error
+    // occurred (-16341)" against "The operation could not be completed") even when the
+    // chain has only one level.
+    const QString reason = QString::fromNSString(error.localizedFailureReason);
+    if (!reason.isEmpty() && !parts.join(QStringLiteral(" ← ")).contains(reason))
+        parts << reason;
+    return parts.join(QStringLiteral(" ← "));
 }
 
 QSize displayPixelSize(SCDisplay *display) {
