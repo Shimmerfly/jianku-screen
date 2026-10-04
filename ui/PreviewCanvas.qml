@@ -163,6 +163,14 @@ Item {
                     readonly property real contentW: Math.max(1, anim.contentWidth)
                     readonly property real contentH: Math.max(1, anim.contentHeight)
                     readonly property real fitScale: Math.min(width / contentW, height / contentH)
+                    // `anim.cursorX/Y` are source *pixels* (the space the recorded
+                    // events and the compositor use), while fitScale below maps source
+                    // *points* onto this item. The driver exposes both, converted in
+                    // one place, because reading the pixel one here put the pointer at
+                    // twice its distance from the top-left corner on a Retina display
+                    // and the error grew the further it was dragged.
+                    readonly property real cursorXPoints: anim.cursorXPoints
+                    readonly property real cursorYPoints: anim.cursorYPoints
                     readonly property real layerW: contentW * fitScale
                     readonly property real layerH: contentH * fitScale
                     readonly property real layerX: (width - layerW) / 2
@@ -247,9 +255,11 @@ Item {
                     visible: anim.active && anim.cursorAvailable
                     width: Math.max(6, anim.cursorPointWidth * uniformScale)
                     height: Math.max(8, anim.cursorPointHeight * uniformScale)
-                    x: frame.camOffsetX * frame.fitScale + (frame.layerX + anim.cursorX * frame.fitScale) * frame.camScale
+                    x: frame.camOffsetX * frame.fitScale
+                       + (frame.layerX + frame.cursorXPoints * frame.fitScale) * frame.camScale
                        - anim.cursorHotspotX * width
-                    y: frame.camOffsetY * frame.fitScale + (frame.layerY + anim.cursorY * frame.fitScale) * frame.camScale
+                    y: frame.camOffsetY * frame.fitScale
+                       + (frame.layerY + frame.cursorYPoints * frame.fitScale) * frame.camScale
                        - anim.cursorHotspotY * height
                     opacity: anim.cursorAlpha * (Number(root.options.hideCursor) ? 0 : 1)
                     transform: [

@@ -83,6 +83,19 @@ int evenExtent(double points);
 QPointF pointerPixelPosition(const QPointF &globalPointAppKit, const QRectF &boundsPoints,
     const QSize &pixelSize, double primaryHeightPoints);
 
+// The same position expressed in source *points* instead of source pixels.
+//
+// Both spaces are in use and neither can be removed: the recorded pointer events and
+// the compositor are in pixels (that is the space the video frames live in), while the
+// live preview draws in points (that is the space the camera and the appearance
+// settings live in). Converting in one place — here — is what keeps them from drifting
+// apart; the drift is silent because on a 1x display the two spaces are identical.
+//
+// Returns the input unchanged when the sizes are unusable, so a caller that cannot
+// convert still draws something rather than snapping to the origin.
+QPointF pixelToPointPosition(const QPointF &pixelPosition, const QSize &pixelSize,
+    const QSizeF &pointSize);
+
 // The display whose frame contains the point, or -1 when there are no displays.
 int displayIndexContaining(const QPointF &point, const QList<QRectF> &displayFrames);
 

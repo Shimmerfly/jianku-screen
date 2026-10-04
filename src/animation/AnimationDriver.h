@@ -26,8 +26,26 @@ class AnimationDriver : public QObject {
     // absolute value at twice its exported size.
     Q_PROPERTY(double sourcePixelWidth READ sourcePixelWidth NOTIFY contentSizeChanged)
     Q_PROPERTY(double sourcePixelHeight READ sourcePixelHeight NOTIFY contentSizeChanged)
+    // sourcePixels / sourcePoints — the display's backing scale factor, usually 2.
+    //
+    // This exists because `cursorX`/`cursorY` are in source *pixels* while the camera
+    // (`camOffsetX`, `zoomFocus`) is in source *points*, and the preview draws in
+    // points. Both spaces are deliberate: the pointer is in pixels because that is
+    // what the recorded events and the compositor use, and the camera is in points
+    // because the zoom is expressed as a fraction of the frame. Mixing them without
+    // this factor put the preview's cursor at twice its distance from the top-left
+    // corner, which is exactly the drift that was reported.
+    Q_PROPERTY(double sourcePixelScale READ sourcePixelScale NOTIFY contentSizeChanged)
+    // Pointer position in source *pixels*. This is the space the recorded pointer
+    // events and the compositor use, so it is what the C++ side wants.
     Q_PROPERTY(double cursorX READ cursorX NOTIFY poseChanged)
     Q_PROPERTY(double cursorY READ cursorY NOTIFY poseChanged)
+    // The same position in source *points*, for the live preview, which draws in
+    // points. Two properties rather than one so QML never has to remember which space
+    // it is holding: reading `cursorX` where points are needed is the mistake that put
+    // the pointer at twice its distance from the corner on a Retina display.
+    Q_PROPERTY(double cursorXPoints READ cursorXPoints NOTIFY poseChanged)
+    Q_PROPERTY(double cursorYPoints READ cursorYPoints NOTIFY poseChanged)
     Q_PROPERTY(double cursorRotation READ cursorRotation NOTIFY poseChanged)
     Q_PROPERTY(double cursorScale READ cursorScale NOTIFY poseChanged)
     Q_PROPERTY(double cursorAlpha READ cursorAlpha NOTIFY poseChanged)
@@ -56,8 +74,15 @@ public:
     double sourcePixelHeight() const {
         return sourcePixelHeight_ > 0.0 ? sourcePixelHeight_ : contentHeight_;
     }
+    // Never zero: the preview divides by it.
+    double sourcePixelScale() const {
+        const double scale = contentWidth_ > 0.0 ? sourcePixelWidth() / contentWidth_ : 1.0;
+        return scale > 0.01 ? scale : 1.0;
+    }
     double cursorX() const { return cursorX_; }
     double cursorY() const { return cursorY_; }
+    double cursorXPoints() const;
+    double cursorYPoints() const;
     double cursorRotation() const { return cursorRotation_; }
     double cursorScale() const { return cursorScale_; }
     double cursorAlpha() const { return cursorAlpha_; }

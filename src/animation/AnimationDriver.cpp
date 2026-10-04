@@ -109,11 +109,22 @@ void AnimationDriver::setSourceGeometry(double x, double y, double widthPoints,
         emit contentSizeChanged();
 }
 
+double AnimationDriver::cursorXPoints() const {
+    return Capture::pixelToPointPosition(QPointF(cursorX_, cursorY_),
+        QSize(int(sourcePixelWidth()), int(sourcePixelHeight())),
+        QSizeF(contentWidth_, contentHeight_)).x();
+}
+
+double AnimationDriver::cursorYPoints() const {
+    return Capture::pixelToPointPosition(QPointF(cursorX_, cursorY_),
+        QSize(int(sourcePixelWidth()), int(sourcePixelHeight())),
+        QSizeF(contentWidth_, contentHeight_)).y();
+}
+
 void AnimationDriver::setManualZoom(bool zoomed) {
     if (zoomed) {
         zoomUntilMs_ = 1.0e12;
-        zoomFocus_ = {contentWidth_ > 0.0 ? cursorX_ / contentWidth_ : 0.5,
-            contentHeight_ > 0.0 ? cursorY_ / contentHeight_ : 0.5};
+        zoomFocus_ = {cursorX_ / sourcePixelWidth(), cursorY_ / sourcePixelHeight()};
     } else {
         zoomUntilMs_ = -1.0;
     }
@@ -161,8 +172,11 @@ void AnimationDriver::tick() {
         x = mapped.x();
         y = mapped.y();
     }
-    x = std::clamp(x, 0.0, contentWidth_);
-    y = std::clamp(y, 0.0, contentHeight_);
+    // Clamped against the *pixel* size, because x/y are pixels. Clamping against
+    // contentWidth_ (points) pinned the pointer at the middle of the frame as soon as
+    // it passed the halfway mark on a Retina display.
+    x = std::clamp(x, 0.0, sourcePixelWidth());
+    y = std::clamp(y, 0.0, sourcePixelHeight());
 
     const bool first = lastX_ < 0.0;
     const bool moved = first || std::abs(x - lastX_) > 0.01 || std::abs(y - lastY_) > 0.01;
@@ -175,8 +189,8 @@ void AnimationDriver::tick() {
         track_.append({nowMs_, x, y, sample.pressed ? Animation::InputKind::Down : Animation::InputKind::Up});
         if (sample.pressed) {
             zoomUntilMs_ = nowMs_ + zoomHoldMs_;
-            zoomFocus_ = {contentWidth_ > 0.0 ? x / contentWidth_ : 0.5,
-                contentHeight_ > 0.0 ? y / contentHeight_ : 0.5};
+            // Normalised, so the numerator's unit has to match the denominator's.
+            zoomFocus_ = {x / sourcePixelWidth(), y / sourcePixelHeight()};
         }
         pressed_ = sample.pressed;
     }
@@ -198,8 +212,7 @@ void AnimationDriver::tick() {
     // camera returns to identity smoothly as the zoom ends.
     const bool zoomed = autoZoomEnabled_ && nowMs_ <= zoomUntilMs_;
     if (zoomed) {
-        zoomFocus_ = {contentWidth_ > 0.0 ? x / contentWidth_ : 0.5,
-            contentHeight_ > 0.0 ? y / contentHeight_ : 0.5};
+        zoomFocus_ = {x / sourcePixelWidth(), y / sourcePixelHeight()};
     } else {
         zoomFocus_ = {0.5, 0.5};
     }

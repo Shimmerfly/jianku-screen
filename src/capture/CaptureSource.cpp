@@ -73,6 +73,15 @@ QPointF pointerPixelPosition(const QPointF &globalPointAppKit, const QRectF &bou
         (quartzY - boundsPoints.y()) * pixelSize.height() / boundsPoints.height());
 }
 
+QPointF pixelToPointPosition(const QPointF &pixelPosition, const QSize &pixelSize,
+    const QSizeF &pointSize) {
+    if (pixelSize.width() <= 0 || pixelSize.height() <= 0
+        || !(pointSize.width() > 0.0) || !(pointSize.height() > 0.0))
+        return pixelPosition;
+    return QPointF(pixelPosition.x() * pointSize.width() / pixelSize.width(),
+        pixelPosition.y() * pointSize.height() / pixelSize.height());
+}
+
 int evenExtent(double points) {
     if (!(points > 0.0))
         return 2;

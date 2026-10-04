@@ -353,6 +353,39 @@ int main() {
             require(outside.x() < 0.0, "a pointer outside the frame is not clamped");
         }
 
+        // --- the two spaces the pointer lives in --------------------------------
+        // Pixels are the frame's space (recorded events, the compositor); points are
+        // the screen's (the camera, the appearance settings, the preview). They are
+        // equal on a 1x display, which is why mixing them up survives every test on
+        // one and shows up as a drifting pointer on a Retina display.
+        {
+            const QSize pixels(3360, 2100);
+            const QSizeF points(1680.0, 1050.0);
+            const QPointF centre = pixelToPointPosition(QPointF(1680.0, 1050.0), pixels, points);
+            require(close(centre.x(), 840.0) && close(centre.y(), 525.0),
+                "the frame centre is the same point in both spaces");
+
+            // The failure this exists for: the frame's bottom-right corner read as a
+            // point value is off the screen entirely.
+            const QPointF corner = pixelToPointPosition(QPointF(3360.0, 2100.0), pixels, points);
+            require(close(corner.x(), 1680.0) && close(corner.y(), 1050.0),
+                "and the far corner maps to the screen's far corner");
+            require(corner.x() <= points.width() && corner.y() <= points.height(),
+                "so the converted pointer stays inside the screen; the raw pixel one does not");
+
+            // A region whose points and pixels differ by something other than 2x still
+            // converts by the ratio, not by a hard-coded scale factor.
+            const QPointF third = pixelToPointPosition(
+                QPointF(300.0, 150.0), QSize(900, 450), QSizeF(300.0, 150.0));
+            require(close(third.x(), 100.0) && close(third.y(), 50.0),
+                "a 3x region converts by its own ratio");
+
+            // Degenerate sizes leave the position alone rather than snapping to zero.
+            const QPointF kept = pixelToPointPosition(QPointF(7.0, 9.0), QSize(), points);
+            require(close(kept.x(), 7.0) && close(kept.y(), 9.0),
+                "an unusable size returns the input unchanged");
+        }
+
         std::cout << "capture source checks passed\n";
         return 0;
     } catch (const std::exception &error) {
