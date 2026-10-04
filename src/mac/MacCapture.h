@@ -40,6 +40,17 @@ class MacCapture final : public QObject {
     // window, a region, or a second screen. Empty until a source starts.
     Q_PROPERTY(QVariantMap sourceGeometry READ sourceGeometry NOTIFY sourceGeometryChanged)
     Q_PROPERTY(bool screenAuthorized READ screenAuthorized NOTIFY screenAuthorizedChanged)
+    // The other two permissions, asked for rather than inferred from a failure.
+    //
+    // The guide used to describe three tabs without knowing which of them was actually
+    // missing, so it could only say "if it still does not work, try…". Reading the state
+    // up front lets it name the missing one and say what breaks without it.
+    Q_PROPERTY(bool inputMonitoringAuthorized READ inputMonitoringAuthorized
+        NOTIFY permissionStateChanged)
+    Q_PROPERTY(bool microphoneAuthorized READ microphoneAuthorized NOTIFY permissionStateChanged)
+    // True when the microphone is needed but not granted. A muted recording is a real
+    // choice, so an unauthorised microphone is only a blocker when it would be used.
+    Q_PROPERTY(bool microphoneBlocked READ microphoneBlocked NOTIFY permissionStateChanged)
     Q_PROPERTY(QString permissionIssue READ permissionIssue NOTIFY permissionIssueChanged)
     Q_PROPERTY(QString permissionIssueKind READ permissionIssueKind NOTIFY permissionIssueChanged)
 
@@ -101,6 +112,12 @@ public:
     QString permissionIssue() const { return permissionIssue_; }
     QString permissionIssueKind() const { return permissionIssueKind_; }
     Q_INVOKABLE void refreshScreenAuthorization();
+    // Re-reads all three, for the guide's "我已授权，重新检测" button.
+    Q_INVOKABLE void refreshPermissionState();
+
+    bool inputMonitoringAuthorized() const;
+    bool microphoneAuthorized() const;
+    bool microphoneBlocked() const;
     Q_INVOKABLE bool requestScreenAuthorization();
     Q_INVOKABLE void openScreenRecordingSettings();
     Q_INVOKABLE void openInputMonitoringSettings();
@@ -124,6 +141,7 @@ signals:
     void recordingStatusChanged();
     void lastRecordingPathChanged();
     void screenAuthorizedChanged();
+    void permissionStateChanged();
     void sourceGeometryChanged();
     void recentProjectsChanged();
     void permissionIssueChanged();

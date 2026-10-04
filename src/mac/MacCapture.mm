@@ -9,6 +9,7 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreMedia/CoreMedia.h>
 #import <AVFoundation/AVFoundation.h>
+#import <AVFoundation/AVCaptureDevice.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <AppKit/AppKit.h>
 
@@ -685,6 +686,35 @@ bool MacCapture::screenAuthorized() const {
 
 void MacCapture::refreshScreenAuthorization() {
     emit screenAuthorizedChanged();
+    emit permissionStateChanged();
+}
+
+// CGPreflightListenEventAccess reports whether *this* binary may tap the event stream.
+// It is the only public way to ask; there is no per-app "not yet asked" state, so an
+// unauthorised answer means either "never asked" or "denied".
+bool MacCapture::inputMonitoringAuthorized() const {
+    return CGPreflightListenEventAccess();
+}
+
+bool MacCapture::microphoneAuthorized() const {
+    // AVCaptureDevice is the documented query on macOS 14+. Reading it does not prompt,
+    // which matters: this is called from a UI binding.
+    const AVAuthorizationStatus status =
+        [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
+    return status == AVAuthorizationStatusAuthorized;
+}
+
+bool MacCapture::microphoneBlocked() const {
+    if (recordingSettings_.value(QStringLiteral("muteMicrophone")).toBool())
+        return false;
+    return !microphoneAuthorized();
+}
+
+void MacCapture::refreshPermissionState() {
+    // requestInputMonitoringAccess() shows the system prompt on the first call and only
+    // reports afterwards, so pressing the button twice is safe.
+    CGRequestListenEventAccess();
+    emit permissionStateChanged();
 }
 
 bool MacCapture::requestScreenAuthorization() {

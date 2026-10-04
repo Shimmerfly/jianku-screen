@@ -88,6 +88,54 @@ Item {
                 width: guideScroll.availableWidth
                 spacing: 12
 
+                // A one-line answer to "why should I care" before anything else. The
+                // previous version opened with the tab bar and a paragraph of
+                // explanation, which assumes the reader already knows that a screen
+                // recorder needs permission at all. Someone who does not will close the
+                // dialog and conclude the app is broken.
+                Rectangle {
+                    Layout.fillWidth: true
+                    implicitHeight: blocker.implicitHeight + 22
+                    radius: 10
+                    color: capture.screenAuthorized && capture.inputMonitoringAuthorized
+                        && !capture.microphoneBlocked ? "#2243d17a" : "#33e0514b"
+                    border.width: 1
+                    border.color: capture.screenAuthorized && capture.inputMonitoringAuthorized
+                        && !capture.microphoneBlocked ? Theme.ok : Theme.danger
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.margins: 11
+                        spacing: 10
+                        Text {
+                            text: capture.screenAuthorized && capture.inputMonitoringAuthorized
+                                && !capture.microphoneBlocked ? "✓" : "!"
+                            color: capture.screenAuthorized && capture.inputMonitoringAuthorized
+                                && !capture.microphoneBlocked ? Theme.ok : Theme.danger
+                            font.pixelSize: 17
+                            font.weight: Font.Bold
+                        }
+                        Text {
+                            id: blocker
+                            Layout.fillWidth: true
+                            text: {
+                                if (capture.screenAuthorized && capture.inputMonitoringAuthorized
+                                        && !capture.microphoneBlocked)
+                                    return "三项权限齐了，可以正常录制。"
+                                const missing = []
+                                if (!capture.screenAuthorized) missing.push("屏幕录制")
+                                if (!capture.inputMonitoringAuthorized) missing.push("输入监控")
+                                if (capture.microphoneBlocked) missing.push("麦克风")
+                                return "还差 " + missing.join("、") + "。缺这几项时录制会直接中止——"
+                                    + "不会录出没有指针或没有声音的成片，因为那样的成片事后修不回来。"
+                            }
+                            color: Theme.text
+                            font.pixelSize: 12
+                            wrapMode: Text.Wrap
+                            lineHeight: 1.3
+                        }
+                    }
+                }
+
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 6
@@ -144,15 +192,26 @@ Item {
                     model: guide.current.steps
                     delegate: RowLayout {
                         required property var modelData
+                        required property int index
                         Layout.fillWidth: true
                         spacing: 9
+                        // A numbered disc rather than a bullet: these are steps to be
+                        // followed in order, and "1. 2. 3." is what makes that obvious
+                        // at a glance to someone who is only skimming.
                         Rectangle {
                             Layout.alignment: Qt.AlignTop
-                            Layout.topMargin: 5
-                            width: 6
-                            height: 6
-                            radius: 3
-                            color: Theme.accent
+                            Layout.topMargin: 1
+                            width: 18
+                            height: 18
+                            radius: 9
+                            color: Theme.accentSoft
+                            Text {
+                                anchors.centerIn: parent
+                                text: index + 1
+                                color: Theme.text
+                                font.pixelSize: 11
+                                font.weight: Font.DemiBold
+                            }
                         }
                         Text {
                             Layout.fillWidth: true
@@ -243,6 +302,10 @@ Item {
                     text: "我已授权，重新检测"
                     tone: "ghost"
                     onClicked: {
+                        // All three, not just the one on screen: the user may have
+                        // granted a different one after the guide told them what was
+                        // missing.
+                        capture.refreshPermissionState()
                         if (guide.kind === "input") capture.requestInputMonitoringAccess()
                         capture.refreshScreenAuthorization()
                         if (guide.kind === "screen" && capture.screenAuthorized) {
