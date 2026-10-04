@@ -6,7 +6,13 @@ Button {
     property string tone: "quiet" // primary, quiet, ghost, record, danger
     property bool selected: false
     implicitHeight: 36
-    implicitWidth: 100
+    // Wide enough for the label, never narrower.
+    //
+    // The fixed 100 was hidden by every existing caller passing an explicit width. The
+    // editor's timeline row does not, so "删除 2 秒" was clipped to "删除 2 …" and the
+    // speed buttons became "…" — the labels were being elided to nothing, in a row
+    // where every button had plenty of room.
+    implicitWidth: Math.max(56, contentItem.implicitWidth + leftPadding + rightPadding + 2)
     leftPadding: 12
     rightPadding: 12
     font.pixelSize: 13

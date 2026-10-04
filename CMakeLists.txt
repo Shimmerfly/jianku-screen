@@ -49,6 +49,10 @@ qt_add_executable(jianku-screen MACOSX_BUNDLE
     src/render/TimelineGeometry.h
     src/render/ExportController.cpp
     src/render/ExportController.h
+    src/render/EditorSession.cpp
+    src/render/EditorSession.h
+    src/render/EditorSessionRegistry.cpp
+    src/render/EditorSessionRegistry.h
     src/animation/AnimationSettings.cpp
     src/animation/AnimationSettings.h
     src/capture/VideoFrameStore.cpp
@@ -273,6 +277,12 @@ set_source_files_properties(ui/UiSlider.qml PROPERTIES QT_RESOURCE_ALIAS UiSlide
 set_source_files_properties(ui/UiToggle.qml PROPERTIES QT_RESOURCE_ALIAS UiToggle.qml)
 set_source_files_properties(ui/UiSegmented.qml PROPERTIES QT_RESOURCE_ALIAS UiSegmented.qml)
 set_source_files_properties(ui/UiColorField.qml PROPERTIES QT_RESOURCE_ALIAS UiColorField.qml)
+# The aliases matter: without them the QML files land under `qrc:/qt/qml/Jianku/Screen/ui/`
+# and `qmldir` still lists `ui/…`, so `loadFromModule` finds a module whose types point at
+# a path the URL scheme does not resolve — which is exactly the "No such file or directory"
+# this produced.
+set_source_files_properties(ui/EditorWindow.qml PROPERTIES QT_RESOURCE_ALIAS EditorWindow.qml)
+set_source_files_properties(ui/EditorTab.qml PROPERTIES QT_RESOURCE_ALIAS EditorTab.qml)
 
 qt_add_qml_module(jianku-screen
     URI Jianku.Screen
@@ -295,6 +305,8 @@ qt_add_qml_module(jianku-screen
         ui/UiToggle.qml
         ui/UiSegmented.qml
         ui/UiColorField.qml
+        ui/EditorWindow.qml
+        ui/EditorTab.qml
 )
 
 target_link_libraries(jianku-screen PRIVATE

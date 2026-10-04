@@ -391,22 +391,17 @@ ApplicationWindow {
                     onClicked: screenshot.capture(settings.current)
                 }
                 UiButton {
-                    // Export the recording through the offline compositor: this is
-                    // the only path that puts the smooth pointer and the camera
-                    // into the finished file.
-                    implicitWidth: 78
-                    text: exporter.busy ? "取消导出" : "导出成片"
+                    // Opens the editor, which is where editing and exporting both
+                    // live now. The export used to start from here, which meant the
+                    // only way to change an edit before exporting was to make it in a
+                    // strip wedged under the preview of a window that is itself being
+                    // recorded. Editing wants the whole screen; recording wants a small
+                    // window out of the way. They are separate windows.
+                    implicitWidth: 92
+                    text: "打开编辑器"
                     tone: "quiet"
-                    enabled: exporter.busy || exporter.defaultOutputPath.length > 0
-                    onClicked: {
-                        if (exporter.busy) exporter.cancel()
-                        else {
-                            exporter.reset()
-                            exporter.start(exporter.defaultOutputPath, true,
-                                !!settings.current.autoZoom, true,
-                                !settings.current.muteMicrophone)
-                        }
-                    }
+                    enabled: capture.lastProjectPath.length > 0
+                    onClicked: registry.openProject(capture.lastProjectPath, false)
                 }
                 UiButton {
                     visible: root.mode === "present"
@@ -488,6 +483,13 @@ ApplicationWindow {
                 // that does nothing.
                 TimelineStrip {
                     id: editStrip
+                    // The strip belongs to the editor now; the main window keeps a
+                    // read-only one for whatever recording is loaded.
+                    // The main window keeps a read-only strip: the editable one lives
+                    // in the editor, where there is room for it and where the export
+                    // that consumes the edit also lives.
+                    interactive: false
+                    controller: timeline
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.bottom: parent.bottom

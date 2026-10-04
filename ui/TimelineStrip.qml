@@ -11,16 +11,26 @@ import QtQuick.Layouts
 Item {
     id: root
     implicitHeight: 74
+    // The controller this strip is a view of. It used to be the global `timeline`
+    // context property, which meant there could only ever be one editor: two windows
+    // would share a playhead, a selection and an undo stack. Passing it in is what
+    // makes a second editor window possible at all.
+    // No default: a strip without a controller is a bug, and `null` makes it a visible
+    // one (`ready` is false) rather than silently binding to some other project.
+    property var controller: null
+    // False turns the strip into a read-only summary: the timeline is drawn, but no
+    // handle or button changes it. The main window uses this; the editor does not.
+    property bool interactive: true
     // False when there is no recording to edit: the whole strip hides rather than
     // showing an empty ruler that does nothing.
-    readonly property bool ready: timeline.loaded
+    readonly property bool ready: !!controller && controller.loaded
 
     readonly property real stripLeft: 12
     readonly property real stripRight: 12
     readonly property real stripWidth: Math.max(1, width - stripLeft - stripRight)
 
     function timeAtX(x) {
-        return timeline.setPlayheadRatio((x - stripLeft) / stripWidth)
+        return root.controller.setPlayheadRatio((x - stripLeft) / stripWidth)
     }
 
     Rectangle {
@@ -50,12 +60,12 @@ Item {
                 font.weight: Font.DemiBold
             }
             Text {
-                text: timeline.error.length > 0
-                    ? timeline.error
-                    : (Number(timeline.outputRatio) < 0.999
-                        ? "已剪到 " + (timeline.outputDurationMs / 1000).toFixed(1) + " 秒"
+                text: root.controller.error.length > 0
+                    ? root.controller.error
+                    : (Number(root.controller.outputRatio) < 0.999
+                        ? "已剪到 " + (root.controller.outputDurationMs / 1000).toFixed(1) + " 秒"
                         : "整段录制")
-                color: timeline.error.length > 0 ? Theme.danger : Theme.textFaint
+                color: root.controller.error.length > 0 ? Theme.danger : Theme.textFaint
                 font.pixelSize: 10
                 elide: Text.ElideRight
                 Layout.fillWidth: true
@@ -65,29 +75,36 @@ Item {
                 text: "切分"
                 implicitWidth: 54
                 implicitHeight: 26
+                // Hidden rather than disabled in the read-only strip: a row of greyed
+                // buttons in the main window would read as "this is broken", not as
+                // "this moved to the editor".
+                visible: root.interactive
                 enabled: root.ready
-                onClicked: timeline.splitAtPlayhead()
+                onClicked: root.controller.splitAtPlayhead()
             }
             UiButton {
                 text: "删除 2 秒"
                 implicitWidth: 82
                 implicitHeight: 26
+                visible: root.interactive
                 enabled: root.ready
-                onClicked: timeline.removeAroundPlayhead(2000)
+                onClicked: root.controller.removeAroundPlayhead(2000)
             }
             UiButton {
                 text: "撤销"
                 implicitWidth: 54
                 implicitHeight: 26
-                enabled: root.ready && timeline.canUndo
-                onClicked: timeline.undo()
+                visible: root.interactive
+                enabled: root.ready && root.controller.canUndo
+                onClicked: root.controller.undo()
             }
             UiButton {
                 text: "重做"
                 implicitWidth: 54
                 implicitHeight: 26
-                enabled: root.ready && timeline.canRedo
-                onClicked: timeline.redo()
+                visible: root.interactive
+                enabled: root.ready && root.controller.canRedo
+                onClicked: root.controller.redo()
             }
             // Retimes the segment the playhead is inside. The values the reference
             // offers; 1× restores real time.
@@ -98,16 +115,18 @@ Item {
                     text: modelData === 1.0 ? "1×" : modelData + "×"
                     implicitWidth: 38
                     implicitHeight: 26
+                    visible: root.interactive
                     enabled: root.ready
-                    onClicked: timeline.setSpeedAtPlayhead(modelData)
+                    onClicked: root.controller.setSpeedAtPlayhead(modelData)
                 }
             }
             UiButton {
                 text: "复原"
                 implicitWidth: 54
                 implicitHeight: 26
-                enabled: root.ready && timeline.edited
-                onClicked: timeline.reset()
+                visible: root.interactive
+                enabled: root.ready && root.controller.edited
+                onClicked: root.controller.reset()
             }
         }
 
@@ -119,7 +138,7 @@ Item {
 
             // Ruler ticks.
             Repeater {
-                model: timeline.rulerTicks
+                model: root.controller.rulerTicks
                 delegate: Item {
                     required property var modelData
                     x: root.stripLeft + modelData.ratio * root.stripWidth
@@ -144,7 +163,7 @@ Item {
             // Segment bars. A retimed segment is tinted so a speed change is visible
             // without opening anything.
             Repeater {
-                model: timeline.segments
+                model: root.controller.segments
                 delegate: Rectangle {
                     required property var modelData
                     x: root.stripLeft + modelData.startRatio * root.stripWidth
@@ -170,6 +189,7 @@ Item {
             // handles so the handles sit on top of it and win the press.
             MouseArea {
                 anchors.fill: parent
+                enabled: root.interactive
                 cursorShape: Qt.PointingHandCursor
                 onPressed: mouse => root.timeAtX(mouse.x)
                 onPositionChanged: mouse => { if (pressed) root.timeAtX(mouse.x) }
@@ -197,6 +217,7 @@ Item {
                     HoverHandler { id: trimHover; cursorShape: Qt.SizeHorCursor }
                     DragHandler {
                         id: trimDrag
+                        enabled: root.interactive
                         target: null
                         onActiveChanged: {
                             if (!active) return
@@ -204,9 +225,9 @@ Item {
                                 (centroid.scenePosition.x - track.mapToScene(0, 0).x
                                     - root.stripLeft) / root.stripWidth))
                             if (modelData.edge === "start")
-                                timeline.trimStartTo(ratio * timeline.outputDurationMs)
+                                root.controller.trimStartTo(ratio * root.controller.outputDurationMs)
                             else
-                                timeline.trimEndTo(ratio * timeline.outputDurationMs)
+                                root.controller.trimEndTo(ratio * root.controller.outputDurationMs)
                         }
                     }
                 }
@@ -214,7 +235,7 @@ Item {
 
             // The playhead. Drawn last so it is never hidden behind a segment.
             Item {
-                x: root.stripLeft + timeline.playheadRatio * root.stripWidth - 1
+                x: root.stripLeft + root.controller.playheadRatio * root.stripWidth - 1
                 width: 2
                 height: track.height
                 Rectangle {
@@ -237,14 +258,14 @@ Item {
             Layout.fillWidth: true
             spacing: 8
             Text {
-                text: "播放头 " + timeline.playheadLabel
+                text: "播放头 " + root.controller.playheadLabel
                 color: Theme.textDim
                 font.pixelSize: 10
             }
             Item { Layout.fillWidth: true }
             Text {
-                text: "输出 " + (timeline.outputDurationMs / 1000).toFixed(1) + " 秒"
-                    + " · 原片 " + (timeline.sourceDurationMs / 1000).toFixed(1) + " 秒"
+                text: "输出 " + (root.controller.outputDurationMs / 1000).toFixed(1) + " 秒"
+                    + " · 原片 " + (root.controller.sourceDurationMs / 1000).toFixed(1) + " 秒"
                 color: Theme.textFaint
                 font.pixelSize: 10
             }

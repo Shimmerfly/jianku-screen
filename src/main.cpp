@@ -5,6 +5,7 @@
 #include "mac/MacWindowStyle.h"
 #include "project/RecentProjects.h"
 #include "render/CanvasPreview.h"
+#include "render/EditorSessionRegistry.h"
 #include "render/ExportController.h"
 #include "render/TimelineController.h"
 #include "render/VideoSurface.h"
@@ -64,6 +65,12 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty(QStringLiteral("canvasPreview"), &canvasPreview);
     engine.rootContext()->setContextProperty(QStringLiteral("timeline"), &timeline);
     engine.rootContext()->setContextProperty(QStringLiteral("brand"), &brand);
+    // The editor's session registry is the one new root-context object: it is shared by
+    // every editor window, and a per-window instance would mean two windows could not
+    // see each other's tabs. Everything project-specific is reached through a session,
+    // not through the root context, so no per-window state leaks into the engine.
+    Render::EditorSessionRegistry registry(&engine);
+    engine.rootContext()->setContextProperty(QStringLiteral("registry"), &registry);
     // The exporter always targets the project the user just recorded, and exports
     // the edit timeline as it stands. The two are wired together here so an export
     // started from the UI can never use a stale timeline: the controller pushes
@@ -84,6 +91,7 @@ int main(int argc, char *argv[]) {
     auto refreshRecent = [&] {
         capture.setRecordingSettings(settings.current());
         capture.refreshRecentProjects();
+        registry.setRecordingDirectory(settings.current().value("recordingDirectory").toString());
     };
     QObject::connect(&settings, &SettingsStore::currentChanged, &capture, refreshRecent);
     refreshRecent();
