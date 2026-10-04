@@ -183,6 +183,22 @@ if(BUILD_TESTING)
     target_link_libraries(timeline-geometry-tests PRIVATE Qt6::Core)
     add_test(NAME timeline-geometry COMMAND timeline-geometry-tests)
 
+    # The editor's central invariant: two open recordings share no state. Worth its own
+    # test rather than a UI demonstration, because the failure mode is silent.
+    add_executable(editor-session-tests tests/EditorSessionTests.cpp
+        src/render/EditorSession.cpp src/render/TimelineController.cpp
+        src/render/TimelineGeometry.cpp src/render/ExportController.cpp
+        src/render/ProjectCompositor.cpp src/project/EditTimeline.cpp
+        src/project/EditSidecar.cpp src/project/RecentProjects.cpp
+        src/render/CanvasLayout.cpp src/render/CanvasRenderer.cpp
+        src/render/MotionBlur.cpp src/animation/AnimationSettings.cpp
+        src/animation/AutoFocusEngine.cpp src/animation/AutomaticZoom.cpp
+        src/animation/CursorEngine.cpp src/animation/SpringSolver.cpp)
+    target_link_libraries(editor-session-tests PRIVATE Qt6::Core Qt6::Gui)
+    target_compile_definitions(editor-session-tests PRIVATE
+        JIANKU_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME editor-session COMMAND editor-session-tests)
+
     add_executable(motion-blur-tests tests/MotionBlurTests.cpp src/render/MotionBlur.cpp)
     target_link_libraries(motion-blur-tests PRIVATE Qt6::Core Qt6::Gui)
     add_test(NAME motion-blur COMMAND motion-blur-tests)
