@@ -92,6 +92,10 @@ Item {
     height: 200
     TimelineStrip {
         id: strip
+        // Passed in, not read from a context property: the strip no longer reaches for
+        // a global `timeline`, because a global controller is exactly what made a
+        // second editor window impossible.
+        controller: timeline
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
